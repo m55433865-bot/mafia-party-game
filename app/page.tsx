@@ -1,29 +1,73 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { socket } from "./lib/socket";
 
-function generateRoomCode() {
-  const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let code = "";
+type Player = {
+  id: string;
+  name: string;
+  isHost: boolean;
+};
 
-  for (let i = 0; i < 6; i += 1) {
-    code += characters[Math.floor(Math.random() * characters.length)];
-  }
-
-  return code;
-}
+type RoomUpdate = {
+  roomCode: string;
+  players: Player[];
+};
 
 export default function Home() {
   const router = useRouter();
   const [playerName, setPlayerName] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
-  function saveRoomSession(nextRoomCode: string, isHost: boolean) {
-    localStorage.setItem("playerName", playerName.trim());
-    localStorage.setItem("roomCode", nextRoomCode);
-    localStorage.setItem("isHost", String(isHost));
+  useEffect(() => {
+    function handleRoomUpdated(room: RoomUpdate) {
+      const currentPlayer = room.players.find((player) => player.id === socket.id);
+
+      if (!currentPlayer) {
+        return;
+      }
+
+      localStorage.setItem("playerName", currentPlayer.name);
+      localStorage.setItem("roomCode", room.roomCode);
+      localStorage.setItem("isHost", String(currentPlayer.isHost));
+      router.push(`/room/${room.roomCode}`);
+    }
+
+    function handleErrorMessage(message: string) {
+      setError(message);
+      setIsLoading(false);
+    }
+
+    function handleConnectError() {
+      setError("Could not connect to the game server.");
+      setIsLoading(false);
+    }
+
+    // Socket.io events drive room creation and joining from the homepage.
+    socket.on("room-updated", handleRoomUpdated);
+    socket.on("error-message", handleErrorMessage);
+    socket.on("connect_error", handleConnectError);
+
+    return () => {
+      socket.off("room-updated", handleRoomUpdated);
+      socket.off("error-message", handleErrorMessage);
+      socket.off("connect_error", handleConnectError);
+    };
+  }, [router]);
+
+  function connectSocket() {
+    if (!socket.connected) {
+      socket.connect();
+    }
+  }
+
+  function resetAndConnect() {
+    setError("");
+    setIsLoading(true);
+    connectSocket();
   }
 
   function handleCreateRoom() {
@@ -32,9 +76,8 @@ export default function Home() {
       return;
     }
 
-    const nextRoomCode = generateRoomCode();
-    saveRoomSession(nextRoomCode, true);
-    router.push(`/room/${nextRoomCode}`);
+    resetAndConnect();
+    socket.emit("create-room", { playerName });
   }
 
   function handleJoinRoom() {
@@ -45,8 +88,11 @@ export default function Home() {
       return;
     }
 
-    saveRoomSession(nextRoomCode, false);
-    router.push(`/room/${nextRoomCode}`);
+    resetAndConnect();
+    socket.emit("join-room", {
+      playerName,
+      roomCode: nextRoomCode,
+    });
   }
 
   return (
@@ -82,9 +128,10 @@ export default function Home() {
 
           <button
             onClick={handleCreateRoom}
+            disabled={isLoading}
             className="min-h-16 rounded-2xl bg-red-500 px-6 text-lg font-bold text-white shadow-lg shadow-red-950/40 transition hover:bg-red-400 active:scale-[0.98]"
           >
-            Create Room
+            {isLoading ? "Connecting..." : "Create Room"}
           </button>
 
           <div className="my-2 h-px bg-zinc-800" />
@@ -106,6 +153,7 @@ export default function Home() {
 
           <button
             onClick={handleJoinRoom}
+            disabled={isLoading}
             className="min-h-16 rounded-2xl border border-zinc-700 bg-zinc-900 px-6 text-lg font-bold text-zinc-100 transition hover:border-zinc-500 hover:bg-zinc-800 active:scale-[0.98]"
           >
             Join Room
