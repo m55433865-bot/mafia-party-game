@@ -32,9 +32,77 @@ function createUniqueRoomCode(rooms) {
 
 function formatRoom(roomCode, room) {
   return {
+    gameStarted: room.gameStarted,
+    lastEliminatedPlayerId: room.lastEliminatedPlayerId,
+    phase: room.phase,
+    revealVoteCounts: room.revealVoteCounts,
     roomCode,
     players: Array.from(room.players.values()),
+    voteCounts: room.revealVoteCounts ? room.lastVoteCounts : {},
   };
+}
+
+function shufflePlayers(players) {
+  const shuffledPlayers = [...players];
+
+  for (let i = shuffledPlayers.length - 1; i > 0; i -= 1) {
+    const randomIndex = Math.floor(Math.random() * (i + 1));
+    [shuffledPlayers[i], shuffledPlayers[randomIndex]] = [
+      shuffledPlayers[randomIndex],
+      shuffledPlayers[i],
+    ];
+  }
+
+  return shuffledPlayers;
+}
+
+function assignRoles(players) {
+  const shuffledPlayers = shufflePlayers(players);
+  const roles = new Map();
+  const specialRoles = ["Mafia", "Doctor", "Detective"];
+
+  shuffledPlayers.forEach((player, index) => {
+    roles.set(player.id, specialRoles[index] ?? "Villager");
+  });
+
+  return roles;
+}
+
+function emitGameStarted(io, roomCode, room) {
+  const publicPlayers = Array.from(room.players.values());
+
+  for (const player of publicPlayers) {
+    io.to(player.id).emit("game-started", {
+      phase: room.phase,
+      roomCode,
+      role: room.roles.get(player.id),
+      players: publicPlayers,
+      voteCounts: {},
+      revealVoteCounts: false,
+    });
+  }
+
+  io.to(roomCode).emit("room-updated", formatRoom(roomCode, room));
+}
+
+function resetDayVotes(room) {
+  room.phase = "day";
+  room.votes = new Map();
+  room.revealVoteCounts = false;
+}
+
+function resetRoomToLobby(room) {
+  room.gameStarted = false;
+  room.lastEliminatedPlayerId = "";
+  room.lastVoteCounts = {};
+  room.phase = "lobby";
+  room.revealVoteCounts = false;
+  room.roles = new Map();
+  room.votes = new Map();
+
+  for (const player of room.players.values()) {
+    player.alive = true;
+  }
 }
 
 function findPlayerId(socket, room, playerId, playerName) {
@@ -77,6 +145,14 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
   }
 
   room.players.delete(leavingPlayerId);
+  room.votes.delete(leavingPlayerId);
+
+  for (const [voterId, votedPlayerId] of room.votes.entries()) {
+    if (votedPlayerId === leavingPlayerId) {
+      room.votes.delete(voterId);
+    }
+  }
+
   socket.leave(cleanRoomCode);
 
   if (room.players.size === 0) {
@@ -88,9 +164,20 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
   }
 
   if (room.hostId === leavingPlayerId) {
+    console.log("host left", {
+      roomCode: cleanRoomCode,
+      playerId: leavingPlayerId,
+    });
+
     const nextHost = room.players.values().next().value;
     room.hostId = nextHost.id;
     nextHost.isHost = true;
+
+    console.log("host transferred", {
+      roomCode: cleanRoomCode,
+      newHostId: nextHost.id,
+      newHostName: nextHost.name,
+    });
   }
 
   io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
@@ -125,14 +212,22 @@ app.prepare().then(() => {
 
       const roomCode = createUniqueRoomCode(rooms);
       const player = {
+        alive: true,
         id: socket.id,
         name: cleanPlayerName,
         isHost: true,
       };
 
       rooms.set(roomCode, {
+        gameStarted: false,
         hostId: socket.id,
+        lastEliminatedPlayerId: "",
+        lastVoteCounts: {},
+        phase: "lobby",
         players: new Map([[socket.id, player]]),
+        revealVoteCounts: false,
+        roles: new Map(),
+        votes: new Map(),
       });
 
       console.log("room created", {
@@ -161,7 +256,13 @@ app.prepare().then(() => {
         return;
       }
 
+      if (room.gameStarted) {
+        socket.emit("error-message", "Game already started.");
+        return;
+      }
+
       const player = {
+        alive: true,
         id: socket.id,
         name: cleanPlayerName,
         isHost: room.hostId === socket.id,
@@ -177,6 +278,143 @@ app.prepare().then(() => {
         isHost: player.isHost,
       });
 
+      io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    });
+
+    socket.on("cancel-game", ({ roomCode }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room) {
+        socket.emit("error-message", "Room does not exist.");
+        return;
+      }
+
+      if (room.hostId !== socket.id) {
+        socket.emit("error-message", "Only the host can cancel the game.");
+        return;
+      }
+
+      resetRoomToLobby(room);
+      io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    });
+
+    socket.on("start-game", ({ roomCode }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const room = rooms.get(cleanRoomCode);
+
+      console.log("server received start-game", {
+        roomCode: cleanRoomCode,
+        socketId: socket.id,
+      });
+
+      if (!room) {
+        socket.emit("error-message", "Room does not exist.");
+        return;
+      }
+
+      if (room.hostId !== socket.id) {
+        socket.emit("error-message", "Only the host can start the game.");
+        return;
+      }
+
+      if (room.players.size < 4) {
+        socket.emit("error-message", "At least 4 players are required.");
+        return;
+      }
+
+      room.gameStarted = true;
+      resetDayVotes(room);
+      room.roles = assignRoles(Array.from(room.players.values()));
+
+      console.log("roles assigned", {
+        roomCode: cleanRoomCode,
+        playerCount: room.players.size,
+      });
+
+      emitGameStarted(io, cleanRoomCode, room);
+    });
+
+    socket.on("vote-player", ({ roomCode, targetPlayerId }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const cleanTargetPlayerId = String(targetPlayerId ?? "").trim();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room || !room.gameStarted || room.phase !== "day") {
+        socket.emit("error-message", "Voting is not active.");
+        return;
+      }
+
+      const voter = room.players.get(socket.id);
+      const targetPlayer = room.players.get(cleanTargetPlayerId);
+
+      if (!voter || !targetPlayer) {
+        socket.emit("error-message", "Player not found.");
+        return;
+      }
+
+      if (!voter.alive) {
+        socket.emit("error-message", "Dead players cannot vote.");
+        return;
+      }
+
+      if (!targetPlayer.alive) {
+        socket.emit("error-message", "You can only vote for alive players.");
+        return;
+      }
+
+      if (voter.id === targetPlayer.id) {
+        socket.emit("error-message", "You cannot vote for yourself.");
+        return;
+      }
+
+      room.votes.set(voter.id, targetPlayer.id);
+      io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    });
+
+    socket.on("end-voting", ({ roomCode }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room || !room.gameStarted || room.phase !== "day") {
+        socket.emit("error-message", "Voting is not active.");
+        return;
+      }
+
+      if (room.hostId !== socket.id) {
+        socket.emit("error-message", "Only the host can end voting.");
+        return;
+      }
+
+      const voteCounts = {};
+
+      for (const targetPlayerId of room.votes.values()) {
+        voteCounts[targetPlayerId] = (voteCounts[targetPlayerId] ?? 0) + 1;
+      }
+
+      let eliminatedPlayerId = "";
+      let highestVotes = 0;
+
+      for (const [playerId, voteCount] of Object.entries(voteCounts)) {
+        if (voteCount > highestVotes) {
+          eliminatedPlayerId = playerId;
+          highestVotes = voteCount;
+        }
+      }
+
+      if (eliminatedPlayerId && highestVotes > 0) {
+        const eliminatedPlayer = room.players.get(eliminatedPlayerId);
+
+        if (eliminatedPlayer) {
+          eliminatedPlayer.alive = false;
+        }
+      }
+
+      room.lastEliminatedPlayerId = eliminatedPlayerId;
+      room.lastVoteCounts = voteCounts;
+      room.revealVoteCounts = true;
+      resetDayVotes(room);
+      room.revealVoteCounts = true;
       io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
     });
 
