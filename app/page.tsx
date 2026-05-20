@@ -152,7 +152,7 @@ export default function Home() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-5 py-10 text-white">
       <section className="flex w-full max-w-sm flex-col items-center text-center">
-        <div className="mb-8 rounded-full border border-red-500/20 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200">
+        <div className="mb-8 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-200">
           Browser party game
         </div>
 
