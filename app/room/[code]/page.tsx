@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   useEffect,
   useMemo,
@@ -115,6 +115,7 @@ function getRoleCard(role: string): RoleCard {
 
 export default function RoomPage() {
   const params = useParams<{ code: string }>();
+  const router = useRouter();
   const socketRef = useRef(socket);
   const previousAliveRef = useRef<Record<string, boolean> | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
@@ -600,6 +601,31 @@ export default function RoomPage() {
       icon,
       roomCode: session.roomCode,
     });
+  }
+
+  function handleLeaveLobby() {
+    setError("");
+    sessionStorage.removeItem("playerName");
+    sessionStorage.removeItem("roomCode");
+    sessionStorage.removeItem("isHost");
+
+    if (!socketRef.current.connected) {
+      router.push("/");
+      return;
+    }
+
+    socketRef.current.emit(
+      "leave-room",
+      {
+        playerId: socketRef.current.id,
+        playerName: session.playerName,
+        roomCode: session.roomCode,
+      },
+      () => {
+        socketRef.current.disconnect();
+        router.push("/");
+      },
+    );
   }
 
   function getPlayer(playerId: string) {
@@ -1104,6 +1130,16 @@ export default function RoomPage() {
           <p className="mt-8 text-lg font-medium text-zinc-300">
             Waiting for host to start...
           </p>
+        ) : null}
+
+        {!gameStarted ? (
+          <button
+            onClick={handleLeaveLobby}
+            className="mt-4 min-h-14 w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-6 text-base font-bold text-zinc-100 transition hover:border-zinc-500 hover:bg-zinc-900 active:scale-[0.98]"
+            type="button"
+          >
+            Leave Lobby
+          </button>
         ) : null}
 
         {gameStarted && isCurrentHost ? (
