@@ -2,7 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { getOrCreateMafiaProfile } from "./lib/mafiaProfile";
 import { socket } from "./lib/socket";
+import { supabase } from "./lib/supabase";
 
 type Player = {
   id: string;
@@ -57,6 +59,58 @@ export default function Home() {
       socket.off("connect_error", handleConnectError);
     };
   }, [router]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadMafiaProfile() {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user || !isMounted) {
+        return;
+      }
+
+      const profile = await getOrCreateMafiaProfile(user);
+
+      if (!isMounted || !profile.display_name) {
+        return;
+      }
+
+      setPlayerName((currentName) => currentName || profile.display_name || "");
+    }
+
+    loadMafiaProfile().catch(() => {
+      // Guest play stays available if profile loading fails.
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session?.user) {
+        return;
+      }
+
+      getOrCreateMafiaProfile(session.user)
+        .then((profile) => {
+          if (!isMounted || !profile.display_name) {
+            return;
+          }
+
+          setPlayerName((currentName) => currentName || profile.display_name || "");
+        })
+        .catch(() => {
+          // Guest play stays available if profile loading fails.
+        });
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   function connectSocket() {
     if (!socket.connected) {
