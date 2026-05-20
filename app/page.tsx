@@ -30,9 +30,9 @@ export default function Home() {
         return;
       }
 
-      localStorage.setItem("playerName", currentPlayer.name);
-      localStorage.setItem("roomCode", room.roomCode);
-      localStorage.setItem("isHost", String(currentPlayer.isHost));
+      sessionStorage.setItem("playerName", currentPlayer.name);
+      sessionStorage.setItem("roomCode", room.roomCode);
+      sessionStorage.setItem("isHost", String(currentPlayer.isHost));
       router.push(`/room/${room.roomCode}`);
     }
 

@@ -9,6 +9,42 @@ const port = Number(process.env.PORT) || 3000;
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
+const PLAYER_COLORS = [
+  "#f87171",
+  "#fb923c",
+  "#facc15",
+  "#a3e635",
+  "#34d399",
+  "#2dd4bf",
+  "#38bdf8",
+  "#60a5fa",
+  "#818cf8",
+  "#a78bfa",
+  "#c084fc",
+  "#e879f9",
+  "#f472b6",
+  "#fb7185",
+  "#f5f5f4",
+];
+
+const PLAYER_ICONS = [
+  "🕵️",
+  "🎩",
+  "🧔",
+  "👨‍⚕️",
+  "👩‍⚕️",
+  "🧑‍💼",
+  "👨‍💼",
+  "👩‍💼",
+  "🧑‍🎤",
+  "🧛",
+  "🥷",
+  "👮",
+  "🧙",
+  "🧓",
+  "👨‍🍳",
+];
+
 function generateRoomCode() {
   const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let code = "";
@@ -30,16 +66,191 @@ function createUniqueRoomCode(rooms) {
   return code;
 }
 
+function getUsedColors(room, ignoredPlayerId = "") {
+  return new Set(
+    Array.from(room.players.values())
+      .filter((player) => player.id !== ignoredPlayerId)
+      .map((player) => player.color),
+  );
+}
+
+function getRandomAvailableColor(room) {
+  const usedColors = getUsedColors(room);
+  const availableColors = PLAYER_COLORS.filter((color) => !usedColors.has(color));
+
+  if (availableColors.length === 0) {
+    return "";
+  }
+
+  return availableColors[Math.floor(Math.random() * availableColors.length)];
+}
+
+function getUsedIcons(room, ignoredPlayerId = "") {
+  return new Set(
+    Array.from(room.players.values())
+      .filter((player) => player.id !== ignoredPlayerId)
+      .map((player) => player.icon),
+  );
+}
+
+function getRandomAvailableIcon(room) {
+  const usedIcons = getUsedIcons(room);
+  const availableIcons = PLAYER_ICONS.filter((icon) => !usedIcons.has(icon));
+
+  if (availableIcons.length === 0) {
+    return "";
+  }
+
+  return availableIcons[Math.floor(Math.random() * availableIcons.length)];
+}
+
+function getGamePlayers(room) {
+  return Array.from(room.players.values()).filter((player) => !player.isHost);
+}
+
+function getAliveGamePlayers(room) {
+  return getGamePlayers(room).filter((player) => player.alive);
+}
+
+function getAlivePlayersByRole(room, roleName) {
+  return getAliveGamePlayers(room).filter(
+    (player) => room.roles.get(player.id) === roleName,
+  );
+}
+
+function getNextNightStep(room) {
+  if (getAlivePlayersByRole(room, "Detective").length > 0) {
+    return "Detective";
+  }
+
+  if (getAlivePlayersByRole(room, "Mafia").length > 0) {
+    return "Mafia";
+  }
+
+  if (getAlivePlayersByRole(room, "Doctor").length > 0) {
+    return "Doctor";
+  }
+
+  return "";
+}
+
 function formatRoom(roomCode, room) {
+  const votingStatus = {};
+  const alivePlayers = getAliveGamePlayers(room);
+  const confirmationVoterIds = getConfirmationVoterIds(room);
+
+  for (const player of alivePlayers) {
+    votingStatus[player.id] = room.votes.has(player.id);
+  }
+
   return {
+    allAlivePlayersVoted:
+      alivePlayers.length > 0 &&
+      alivePlayers.every((player) => room.votes.has(player.id)),
+    confirmationResponses: Array.from(room.confirmationResponses),
+    confirmationVoterIds,
+    defenseEndsAt: room.defenseEndsAt,
     gameStarted: room.gameStarted,
+    gameOver: room.gameOver,
     lastEliminatedPlayerId: room.lastEliminatedPlayerId,
+    nightResultMessage: room.nightResultMessage,
+    pendingEliminationId: room.pendingEliminationId,
     phase: room.phase,
+    nightStep: room.nightStep,
+    playerColors: PLAYER_COLORS,
+    playerIcons: PLAYER_ICONS,
     revealVoteCounts: room.revealVoteCounts,
     roomCode,
     players: Array.from(room.players.values()),
+    voteTargets: room.revealVoteCounts ? room.lastVoteTargets : [],
     voteCounts: room.revealVoteCounts ? room.lastVoteCounts : {},
+    votingStatus,
+    winner: room.winner,
   };
+}
+
+function getVoteDetails(room) {
+  const voteCounts = {};
+  const voteTargets = [];
+
+  for (const [voterId, targetPlayerId] of room.votes.entries()) {
+    const voter = room.players.get(voterId);
+    const targetPlayer = room.players.get(targetPlayerId);
+
+    if (!voter?.alive || voter.isHost || !targetPlayer?.alive || targetPlayer.isHost) {
+      continue;
+    }
+
+    voteCounts[targetPlayerId] = (voteCounts[targetPlayerId] ?? 0) + 1;
+    voteTargets.push({ targetPlayerId, voterId });
+  }
+
+  return { voteCounts, voteTargets };
+}
+
+function getHighestVotedPlayerId(voteCounts) {
+  let highestVotedPlayerId = "";
+  let highestVotes = 0;
+
+  for (const [playerId, voteCount] of Object.entries(voteCounts)) {
+    if (voteCount > highestVotes) {
+      highestVotedPlayerId = playerId;
+      highestVotes = voteCount;
+    }
+  }
+
+  return highestVotes > 0 ? highestVotedPlayerId : "";
+}
+
+function getConfirmationVoterIds(room) {
+  if (!room.pendingEliminationId) {
+    return [];
+  }
+
+  return Array.from(room.votes.entries())
+    .filter(([voterId, targetPlayerId]) => {
+      const voter = room.players.get(voterId);
+
+      return (
+        targetPlayerId === room.pendingEliminationId &&
+        voter?.alive &&
+        !voter.isHost &&
+        !room.confirmationChangedVoters.has(voterId)
+      );
+    })
+    .map(([voterId]) => voterId);
+}
+
+function setVoteSnapshot(room) {
+  const { voteCounts, voteTargets } = getVoteDetails(room);
+
+  room.lastVoteCounts = voteCounts;
+  room.lastVoteTargets = voteTargets;
+  return voteCounts;
+}
+
+function startDefensePhase(room, nomineeId) {
+  room.confirmationResponses = new Set();
+  room.defenseEndsAt = Date.now() + 30000;
+  room.pendingEliminationId = nomineeId;
+  room.phase = "defense";
+  room.revealVoteCounts = true;
+}
+
+function eliminatePendingPlayer(room) {
+  const eliminatedPlayer = room.players.get(room.pendingEliminationId);
+
+  if (eliminatedPlayer) {
+    eliminatedPlayer.alive = false;
+  }
+
+  room.lastEliminatedPlayerId = room.pendingEliminationId;
+  room.confirmationResponses = new Set();
+  room.confirmationChangedVoters = new Set();
+  room.defenseEndsAt = 0;
+  room.pendingEliminationId = "";
+  setVoteSnapshot(room);
+  room.revealVoteCounts = true;
 }
 
 function shufflePlayers(players) {
@@ -74,11 +285,13 @@ function emitGameStarted(io, roomCode, room) {
   for (const player of publicPlayers) {
     io.to(player.id).emit("game-started", {
       phase: room.phase,
+      gameOver: room.gameOver,
       roomCode,
-      role: room.roles.get(player.id),
+      role: player.isHost ? "Moderator" : room.roles.get(player.id),
       players: publicPlayers,
       voteCounts: {},
       revealVoteCounts: false,
+      nightStep: room.nightStep,
     });
   }
 
@@ -86,23 +299,119 @@ function emitGameStarted(io, roomCode, room) {
 }
 
 function resetDayVotes(room) {
+  if (room.gameOver) {
+    return;
+  }
+
   room.phase = "day";
+  room.confirmationResponses = new Set();
+  room.defenseEndsAt = 0;
+  room.lastVoteTargets = [];
+  room.nightActions = {
+    detectiveTargetId: "",
+    doctorTargetId: "",
+    mafiaTargetId: "",
+  };
+  room.nightStep = "";
+  room.pendingEliminationId = "";
   room.votes = new Map();
   room.revealVoteCounts = false;
 }
 
+function startNightPhase(room) {
+  if (room.gameOver) {
+    return;
+  }
+
+  room.phase = "night";
+  room.confirmationResponses = new Set();
+  room.confirmationChangedVoters = new Set();
+  room.defenseEndsAt = 0;
+  room.pendingEliminationId = "";
+  room.revealVoteCounts = false;
+  room.nightActions = {
+    detectiveTargetId: "",
+    doctorTargetId: "",
+    mafiaTargetId: "",
+  };
+  room.nightStep = getNextNightStep(room);
+  room.nightResultMessage = "";
+  room.votes = new Map();
+}
+
 function resetRoomToLobby(room) {
+  room.gameOver = false;
   room.gameStarted = false;
+  room.confirmationResponses = new Set();
+  room.confirmationChangedVoters = new Set();
+  room.defenseEndsAt = 0;
   room.lastEliminatedPlayerId = "";
   room.lastVoteCounts = {};
+  room.lastVoteTargets = [];
+  room.nightActions = {
+    detectiveTargetId: "",
+    doctorTargetId: "",
+    mafiaTargetId: "",
+  };
+  room.nightResultMessage = "";
+  room.nightStep = "";
+  room.pendingEliminationId = "";
   room.phase = "lobby";
   room.revealVoteCounts = false;
   room.roles = new Map();
   room.votes = new Map();
+  room.winner = "";
 
   for (const player of room.players.values()) {
-    player.alive = true;
+    player.alive = !player.isHost;
   }
+}
+
+function checkWinCondition(room) {
+  if (!room.gameStarted || room.gameOver) {
+    return false;
+  }
+
+  let aliveMafiaCount = 0;
+  let aliveNonMafiaCount = 0;
+
+  for (const player of getAliveGamePlayers(room)) {
+    const role = room.roles.get(player.id);
+
+    if (role === "Mafia") {
+      aliveMafiaCount += 1;
+    } else {
+      aliveNonMafiaCount += 1;
+    }
+  }
+
+  if (aliveMafiaCount === 0) {
+    room.gameOver = true;
+    room.phase = "game-over";
+    room.winner = "Villagers Win";
+    room.votes = new Map();
+    room.nightActions = {
+      detectiveTargetId: "",
+      doctorTargetId: "",
+      mafiaTargetId: "",
+    };
+    return true;
+  }
+
+  if (aliveMafiaCount >= aliveNonMafiaCount) {
+    room.gameOver = true;
+    room.phase = "game-over";
+    room.winner = "Mafia Wins";
+    room.votes = new Map();
+    room.nightActions = {
+      detectiveTargetId: "",
+      doctorTargetId: "",
+      mafiaTargetId: "",
+    };
+    return true;
+  }
+
+  return false;
 }
 
 function findPlayerId(socket, room, playerId, playerName) {
@@ -145,11 +454,26 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
   }
 
   room.players.delete(leavingPlayerId);
+  room.confirmationResponses.delete(leavingPlayerId);
+  room.confirmationChangedVoters.delete(leavingPlayerId);
   room.votes.delete(leavingPlayerId);
 
   for (const [voterId, votedPlayerId] of room.votes.entries()) {
     if (votedPlayerId === leavingPlayerId) {
       room.votes.delete(voterId);
+      room.confirmationResponses.delete(voterId);
+    }
+  }
+
+  if (room.pendingEliminationId === leavingPlayerId) {
+    const voteCounts = setVoteSnapshot(room);
+    const nextNomineeId = getHighestVotedPlayerId(voteCounts);
+
+    room.pendingEliminationId = nextNomineeId;
+    room.confirmationResponses = new Set();
+
+    if (!nextNomineeId && ["defense", "confirmation"].includes(room.phase)) {
+      resetDayVotes(room);
     }
   }
 
@@ -172,6 +496,15 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
     const nextHost = room.players.values().next().value;
     room.hostId = nextHost.id;
     nextHost.isHost = true;
+    nextHost.alive = false;
+    room.roles.delete(nextHost.id);
+    room.votes.delete(nextHost.id);
+
+    for (const [voterId, votedPlayerId] of room.votes.entries()) {
+      if (votedPlayerId === nextHost.id) {
+        room.votes.delete(voterId);
+      }
+    }
 
     console.log("host transferred", {
       roomCode: cleanRoomCode,
@@ -180,6 +513,7 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
     });
   }
 
+  checkWinCondition(room);
   io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
 }
 
@@ -211,24 +545,49 @@ app.prepare().then(() => {
       }
 
       const roomCode = createUniqueRoomCode(rooms);
+      rooms.set(roomCode, {
+        confirmationResponses: new Set(),
+        confirmationChangedVoters: new Set(),
+        defenseEndsAt: 0,
+        gameOver: false,
+        gameStarted: false,
+        hostId: socket.id,
+        lastEliminatedPlayerId: "",
+        lastVoteCounts: {},
+        lastVoteTargets: [],
+        nightActions: {
+          detectiveTargetId: "",
+          doctorTargetId: "",
+          mafiaTargetId: "",
+        },
+        nightResultMessage: "",
+        nightStep: "",
+        pendingEliminationId: "",
+        phase: "lobby",
+        players: new Map(),
+        revealVoteCounts: false,
+        roles: new Map(),
+        votes: new Map(),
+        winner: "",
+      });
+
+      const room = rooms.get(roomCode);
       const player = {
-        alive: true,
+        alive: false,
+        color: getRandomAvailableColor(room),
+        icon: getRandomAvailableIcon(room),
         id: socket.id,
         name: cleanPlayerName,
         isHost: true,
       };
 
-      rooms.set(roomCode, {
-        gameStarted: false,
-        hostId: socket.id,
-        lastEliminatedPlayerId: "",
-        lastVoteCounts: {},
-        phase: "lobby",
-        players: new Map([[socket.id, player]]),
-        revealVoteCounts: false,
-        roles: new Map(),
-        votes: new Map(),
-      });
+      if (!player.color || !player.icon) {
+        socket.emit("error-message", "Room is full.");
+        rooms.delete(roomCode);
+        return;
+      }
+
+      room.players.set(socket.id, player);
 
       console.log("room created", {
         roomCode,
@@ -237,7 +596,7 @@ app.prepare().then(() => {
       });
 
       socket.join(roomCode);
-      io.to(roomCode).emit("room-updated", formatRoom(roomCode, rooms.get(roomCode)));
+      io.to(roomCode).emit("room-updated", formatRoom(roomCode, room));
     });
 
     // Players can join only rooms already created in server memory.
@@ -263,10 +622,17 @@ app.prepare().then(() => {
 
       const player = {
         alive: true,
+        color: getRandomAvailableColor(room),
+        icon: getRandomAvailableIcon(room),
         id: socket.id,
         name: cleanPlayerName,
         isHost: room.hostId === socket.id,
       };
+
+      if (!player.color || !player.icon) {
+        socket.emit("error-message", "Room is full.");
+        return;
+      }
 
       room.players.set(socket.id, player);
       socket.join(cleanRoomCode);
@@ -278,6 +644,78 @@ app.prepare().then(() => {
         isHost: player.isHost,
       });
 
+      io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    });
+
+    socket.on("change-color", ({ roomCode, color }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const cleanColor = String(color ?? "").trim();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room) {
+        socket.emit("error-message", "Room does not exist.");
+        return;
+      }
+
+      if (room.gameStarted) {
+        socket.emit("error-message", "Colors can only be changed in lobby.");
+        return;
+      }
+
+      if (!PLAYER_COLORS.includes(cleanColor)) {
+        socket.emit("error-message", "Choose one of the available colors.");
+        return;
+      }
+
+      const player = room.players.get(socket.id);
+
+      if (!player) {
+        socket.emit("error-message", "Player not found.");
+        return;
+      }
+
+      if (getUsedColors(room, socket.id).has(cleanColor)) {
+        socket.emit("error-message", "That color is already taken.");
+        return;
+      }
+
+      player.color = cleanColor;
+      io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    });
+
+    socket.on("change-icon", ({ roomCode, icon }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const cleanIcon = String(icon ?? "").trim();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room) {
+        socket.emit("error-message", "Room does not exist.");
+        return;
+      }
+
+      if (room.gameStarted) {
+        socket.emit("error-message", "Icons can only be changed in lobby.");
+        return;
+      }
+
+      if (!PLAYER_ICONS.includes(cleanIcon)) {
+        socket.emit("error-message", "Choose one of the available icons.");
+        return;
+      }
+
+      const player = room.players.get(socket.id);
+
+      if (!player) {
+        socket.emit("error-message", "Player not found.");
+        return;
+      }
+
+      if (getUsedIcons(room, socket.id).has(cleanIcon)) {
+        socket.emit("error-message", "That icon is already taken.");
+        return;
+      }
+
+      player.icon = cleanIcon;
       io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
     });
 
@@ -318,14 +756,14 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.players.size < 4) {
-        socket.emit("error-message", "At least 4 players are required.");
-        return;
-      }
-
       room.gameStarted = true;
+      room.gameOver = false;
       resetDayVotes(room);
-      room.roles = assignRoles(Array.from(room.players.values()));
+      for (const player of room.players.values()) {
+        player.alive = !player.isHost;
+      }
+      room.roles = assignRoles(getGamePlayers(room));
+      room.winner = "";
 
       console.log("roles assigned", {
         roomCode: cleanRoomCode,
@@ -340,7 +778,7 @@ app.prepare().then(() => {
       const cleanTargetPlayerId = String(targetPlayerId ?? "").trim();
       const room = rooms.get(cleanRoomCode);
 
-      if (!room || !room.gameStarted || room.phase !== "day") {
+      if (!room || !room.gameStarted || room.gameOver || room.phase !== "day") {
         socket.emit("error-message", "Voting is not active.");
         return;
       }
@@ -348,7 +786,7 @@ app.prepare().then(() => {
       const voter = room.players.get(socket.id);
       const targetPlayer = room.players.get(cleanTargetPlayerId);
 
-      if (!voter || !targetPlayer) {
+      if (!voter || voter.isHost || !targetPlayer || targetPlayer.isHost) {
         socket.emit("error-message", "Player not found.");
         return;
       }
@@ -376,7 +814,7 @@ app.prepare().then(() => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
 
-      if (!room || !room.gameStarted || room.phase !== "day") {
+      if (!room || !room.gameStarted || room.gameOver || room.phase !== "day") {
         socket.emit("error-message", "Voting is not active.");
         return;
       }
@@ -386,36 +824,275 @@ app.prepare().then(() => {
         return;
       }
 
-      const voteCounts = {};
+      const allAlivePlayersVoted = getAliveGamePlayers(room).every((player) =>
+        room.votes.has(player.id),
+      );
 
-      for (const targetPlayerId of room.votes.values()) {
-        voteCounts[targetPlayerId] = (voteCounts[targetPlayerId] ?? 0) + 1;
+      if (!allAlivePlayersVoted) {
+        socket.emit("error-message", "Waiting for all alive players to vote.");
+        return;
       }
 
-      let eliminatedPlayerId = "";
-      let highestVotes = 0;
+      const voteCounts = setVoteSnapshot(room);
+      const nomineeId = getHighestVotedPlayerId(voteCounts);
 
-      for (const [playerId, voteCount] of Object.entries(voteCounts)) {
-        if (voteCount > highestVotes) {
-          eliminatedPlayerId = playerId;
-          highestVotes = voteCount;
-        }
-      }
+      room.confirmationChangedVoters = new Set();
+      room.lastEliminatedPlayerId = "";
+      startDefensePhase(room, nomineeId);
 
-      if (eliminatedPlayerId && highestVotes > 0) {
-        const eliminatedPlayer = room.players.get(eliminatedPlayerId);
-
-        if (eliminatedPlayer) {
-          eliminatedPlayer.alive = false;
-        }
-      }
-
-      room.lastEliminatedPlayerId = eliminatedPlayerId;
-      room.lastVoteCounts = voteCounts;
-      room.revealVoteCounts = true;
-      resetDayVotes(room);
-      room.revealVoteCounts = true;
       io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    });
+
+    socket.on("defense-done", ({ roomCode }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room || !room.gameStarted || room.gameOver || room.phase !== "defense") {
+        socket.emit("error-message", "Defense phase is not active.");
+        return;
+      }
+
+      if (room.hostId !== socket.id) {
+        socket.emit("error-message", "Only the moderator can finish defense.");
+        return;
+      }
+
+      room.confirmationResponses = new Set();
+      room.defenseEndsAt = 0;
+      room.phase = "confirmation";
+      io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    });
+
+    socket.on("confirmation-vote", ({ roomCode, choice, targetPlayerId }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const cleanChoice = String(choice ?? "").trim();
+      const cleanTargetPlayerId = String(targetPlayerId ?? "").trim();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room || !room.gameStarted || room.gameOver || room.phase !== "confirmation") {
+        socket.emit("error-message", "Confirmation voting is not active.");
+        return;
+      }
+
+      const voter = room.players.get(socket.id);
+      const confirmationVoterIds = getConfirmationVoterIds(room);
+
+      if (!voter || !confirmationVoterIds.includes(socket.id)) {
+        socket.emit("error-message", "You cannot change this vote.");
+        return;
+      }
+
+      if (room.confirmationResponses.has(socket.id)) {
+        socket.emit("error-message", "Your confirmation vote is already submitted.");
+        return;
+      }
+
+      if (cleanChoice === "keep") {
+        room.confirmationResponses.add(socket.id);
+      } else if (cleanChoice === "change") {
+        const targetPlayer = room.players.get(cleanTargetPlayerId);
+
+        if (!targetPlayer || targetPlayer.isHost || !targetPlayer.alive) {
+          socket.emit("error-message", "Choose an alive player.");
+          return;
+        }
+
+        if (targetPlayer.id === voter.id) {
+          socket.emit("error-message", "You cannot vote for yourself.");
+          return;
+        }
+
+        if (targetPlayer.id === room.pendingEliminationId) {
+          socket.emit("error-message", "Choose a different player.");
+          return;
+        }
+
+        room.votes.set(socket.id, targetPlayer.id);
+        room.confirmationChangedVoters.add(socket.id);
+        room.confirmationResponses.add(socket.id);
+        setVoteSnapshot(room);
+      } else {
+        socket.emit("error-message", "Choose keep or change.");
+        return;
+      }
+
+      io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    });
+
+    socket.on("finish-confirmation", ({ roomCode }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room || !room.gameStarted || room.gameOver || room.phase !== "confirmation") {
+        socket.emit("error-message", "Confirmation voting is not active.");
+        return;
+      }
+
+      if (room.hostId !== socket.id) {
+        socket.emit("error-message", "Only the moderator can show the result.");
+        return;
+      }
+
+      const confirmationVoterIds = getConfirmationVoterIds(room);
+      const allConfirmationVotesSubmitted = confirmationVoterIds.every((playerId) =>
+        room.confirmationResponses.has(playerId),
+      );
+
+      if (!allConfirmationVotesSubmitted) {
+        socket.emit("error-message", "Waiting for confirmation votes.");
+        return;
+      }
+
+      const voteCounts = setVoteSnapshot(room);
+      const nextNomineeId = getHighestVotedPlayerId(voteCounts);
+
+      if (nextNomineeId && nextNomineeId !== room.pendingEliminationId) {
+        startDefensePhase(room, nextNomineeId);
+      } else {
+        eliminatePendingPlayer(room);
+
+        if (!checkWinCondition(room)) {
+          room.phase = "day-results";
+        }
+      }
+
+      io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    });
+
+    socket.on("move-to-night", ({ roomCode }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room || !room.gameStarted || room.gameOver || room.phase !== "day-results") {
+        socket.emit("error-message", "Night phase is not ready.");
+        return;
+      }
+
+      if (room.hostId !== socket.id) {
+        socket.emit("error-message", "Only the host can move to night.");
+        return;
+      }
+
+      startNightPhase(room);
+      io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    });
+
+    function advanceNightStepOrResolve(cleanRoomCode, room) {
+      if (
+        room.nightStep === "Detective" &&
+        getAlivePlayersByRole(room, "Mafia").length > 0
+      ) {
+        room.nightStep = "Mafia";
+      } else if (
+        ["Detective", "Mafia"].includes(room.nightStep) &&
+        getAlivePlayersByRole(room, "Doctor").length > 0
+      ) {
+        room.nightStep = "Doctor";
+      } else {
+        room.nightStep = "";
+        resolveNightIfReady(cleanRoomCode, room);
+        return;
+      }
+
+      io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    }
+
+    function resolveNightIfReady(cleanRoomCode, room) {
+      const aliveRoleEntries = getAliveGamePlayers(room).map((player) => [
+        player.id,
+        room.roles.get(player.id),
+      ]);
+      const hasAliveMafia = aliveRoleEntries.some(([, role]) => role === "Mafia");
+      const hasAliveDoctor = aliveRoleEntries.some(([, role]) => role === "Doctor");
+      const hasAliveDetective = aliveRoleEntries.some(
+        ([, role]) => role === "Detective",
+      );
+      const mafiaReady = !hasAliveMafia || Boolean(room.nightActions.mafiaTargetId);
+      const doctorReady =
+        !hasAliveDoctor || Boolean(room.nightActions.doctorTargetId);
+      const detectiveReady =
+        !hasAliveDetective || Boolean(room.nightActions.detectiveTargetId);
+
+      if (!mafiaReady || !doctorReady || !detectiveReady) {
+        return;
+      }
+
+      const killedPlayer = room.players.get(room.nightActions.mafiaTargetId);
+      const savedPlayerId = room.nightActions.doctorTargetId;
+
+      if (killedPlayer && killedPlayer.id !== savedPlayerId) {
+        killedPlayer.alive = false;
+        room.nightResultMessage = `${killedPlayer.name} was killed during the night.`;
+      } else if (killedPlayer && killedPlayer.id === savedPlayerId) {
+        room.nightResultMessage = "The Doctor saved the target. Nobody died.";
+      } else {
+        room.nightResultMessage = "Nobody died during the night.";
+      }
+
+      if (!checkWinCondition(room)) {
+        resetDayVotes(room);
+      }
+
+      io.to(cleanRoomCode).emit("room-updated", formatRoom(cleanRoomCode, room));
+    }
+
+    socket.on("night-action", ({ roomCode }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room || !room.gameStarted || room.gameOver || room.phase !== "night") {
+        socket.emit("error-message", "Night actions are not active.");
+        return;
+      }
+
+      socket.emit("error-message", "The moderator submits night actions.");
+    });
+
+    socket.on("moderator-night-action", ({ roomCode, targetPlayerId }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const cleanTargetPlayerId = String(targetPlayerId ?? "").trim();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room || !room.gameStarted || room.gameOver || room.phase !== "night") {
+        socket.emit("error-message", "Night actions are not active.");
+        return;
+      }
+
+      if (room.hostId !== socket.id) {
+        socket.emit("error-message", "Only the moderator can submit night actions.");
+        return;
+      }
+
+      const targetPlayer = room.players.get(cleanTargetPlayerId);
+
+      if (!targetPlayer || targetPlayer.isHost || !targetPlayer.alive) {
+        socket.emit("error-message", "Choose an alive player.");
+        return;
+      }
+
+      if (room.nightStep === "Detective") {
+        room.nightActions.detectiveTargetId = targetPlayer.id;
+        const detective = getAlivePlayersByRole(room, "Detective")[0];
+
+        if (detective) {
+          const targetRole = room.roles.get(targetPlayer.id);
+
+          io.to(detective.id).emit("detective-result", {
+            detectedParty: targetRole === "Mafia" ? "Mafia" : "Villager",
+            isMafia: targetRole === "Mafia",
+            targetName: targetPlayer.name,
+          });
+        }
+      } else if (room.nightStep === "Mafia") {
+        room.nightActions.mafiaTargetId = targetPlayer.id;
+      } else if (room.nightStep === "Doctor") {
+        room.nightActions.doctorTargetId = targetPlayer.id;
+      } else {
+        socket.emit("error-message", "No night action is waiting.");
+        return;
+      }
+
+      advanceNightStepOrResolve(cleanRoomCode, room);
     });
 
     // Explicit leave handles browser back/navigation before disconnecting the socket.
