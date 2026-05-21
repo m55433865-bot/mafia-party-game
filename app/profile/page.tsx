@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 import {
   ensureMafiaProfile,
   isMafiaProfileComplete,
@@ -17,6 +17,41 @@ export default function ProfilePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [userId, setUserId] = useState("");
+  const displayInitial = displayName.trim().slice(0, 1).toUpperCase() || "?";
+
+  function resizePhoto(file: File) {
+    return new Promise<string>((resolve, reject) => {
+      const image = new Image();
+      const objectUrl = URL.createObjectURL(file);
+
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        const maxSize = 480;
+        const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+        canvas.width = Math.round(image.width * scale);
+        canvas.height = Math.round(image.height * scale);
+
+        const context = canvas.getContext("2d");
+
+        if (!context) {
+          URL.revokeObjectURL(objectUrl);
+          reject(new Error("Could not process image."));
+          return;
+        }
+
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(objectUrl);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+
+      image.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("Choose a valid image."));
+      };
+
+      image.src = objectUrl;
+    });
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -85,6 +120,28 @@ export default function ProfilePage() {
     }
   }
 
+  async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      setError("Choose an image file.");
+      return;
+    }
+
+    setError("");
+
+    try {
+      const nextAvatarUrl = await resizePhoto(file);
+      setAvatarUrl(nextAvatarUrl);
+    } catch {
+      setError("Could not load that photo.");
+    }
+  }
+
   if (isLoading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-5 py-10 text-white">
@@ -101,7 +158,34 @@ export default function ProfilePage() {
         </p>
         <h1 className="mt-4 text-4xl font-bold">Set Your Game Identity</h1>
 
-        <form onSubmit={handleSaveProfile} className="mt-8 flex flex-col gap-4">
+        <form onSubmit={handleSaveProfile} className="mt-8 flex flex-col gap-5">
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 text-center">
+            <div className="mx-auto flex h-32 w-32 items-center justify-center overflow-hidden rounded-3xl border border-zinc-700 bg-zinc-950">
+              {avatarUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  alt="Profile preview"
+                  className="h-full w-full object-cover"
+                  src={avatarUrl}
+                />
+              ) : (
+                <span className="text-5xl font-black text-zinc-600">
+                  {displayInitial}
+                </span>
+              )}
+            </div>
+
+            <label className="mt-4 flex min-h-14 cursor-pointer items-center justify-center rounded-2xl border border-dashed border-emerald-500/40 bg-emerald-500/10 px-4 text-base font-bold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-500/15">
+              Choose Photo
+              <input
+                accept="image/*"
+                className="sr-only"
+                onChange={handlePhotoChange}
+                type="file"
+              />
+            </label>
+          </div>
+
           <label className="text-left text-sm font-medium text-zinc-300">
             Username
             <input
@@ -113,27 +197,6 @@ export default function ProfilePage() {
               required
             />
           </label>
-
-          <label className="text-left text-sm font-medium text-zinc-300">
-            Photo URL
-            <input
-              value={avatarUrl}
-              onChange={(event) => setAvatarUrl(event.target.value)}
-              className="mt-2 min-h-14 w-full rounded-2xl border border-zinc-800 bg-zinc-900 px-4 text-lg text-white outline-none transition placeholder:text-zinc-500 focus:border-red-400"
-              placeholder="https://example.com/photo.jpg"
-              type="url"
-              required
-            />
-          </label>
-
-          {avatarUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              alt="Profile preview"
-              className="h-24 w-24 rounded-2xl border border-zinc-800 object-cover"
-              src={avatarUrl}
-            />
-          ) : null}
 
           <button
             disabled={isSaving}
