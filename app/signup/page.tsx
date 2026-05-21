@@ -10,8 +10,6 @@ export default function SignupPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [pendingEmail, setPendingEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [otpCode, setOtpCode] = useState("");
@@ -19,61 +17,58 @@ export default function SignupPage() {
   const [successMessage, setSuccessMessage] = useState("");
   const [showOtpStep, setShowOtpStep] = useState(false);
 
-  async function handleSignup(event: FormEvent<HTMLFormElement>) {
+  async function sendOtp(nextEmail: string) {
+    const normalizedEmail = nextEmail.trim().toLowerCase();
+
+    const { error: otpError } = await supabase.auth.signInWithOtp({
+      email: normalizedEmail,
+      options: { shouldCreateUser: true },
+    });
+
+    console.log("OTP sent with type: email", { email: normalizedEmail });
+
+    if (otpError) {
+      throw otpError;
+    }
+
+    return normalizedEmail;
+  }
+
+  async function handleSendOtp(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     setSuccessMessage("");
-
-    if (password !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
-
     setIsLoading(true);
-    const normalizedEmail = email.trim().toLowerCase();
-    const otpType = "signup";
 
-    const { data, error: signupError } = await supabase.auth.signUp({
-      email: normalizedEmail,
-      password,
-    });
-    console.log(`OTP sent with type: ${otpType}`, { email: normalizedEmail });
-
-    if (signupError) {
-      setError(signupError.message);
+    try {
+      const normalizedEmail = await sendOtp(email);
+      setPendingEmail(normalizedEmail);
+      setShowOtpStep(true);
+      setSuccessMessage("Check your email and enter the verification code.");
+      setResendCooldown(60);
+    } catch (otpError) {
+      setError(
+        otpError instanceof Error ? otpError.message : "Could not send the code.",
+      );
+    } finally {
       setIsLoading(false);
-      return;
     }
-
-    if (data.session) {
-      await supabase.auth.signOut();
-    }
-
-    setPendingEmail(normalizedEmail);
-    setShowOtpStep(true);
-    setSuccessMessage("Check your email and enter the verification code.");
-    setPassword("");
-    setConfirmPassword("");
-    setResendCooldown(60);
-    setIsLoading(false);
   }
 
   async function handleVerifyOtp(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     setIsLoading(true);
+
     const normalizedEmail = pendingEmail.trim().toLowerCase();
     const cleanOtpCode = otpCode.replace(/\s/g, "").trim();
-    const otpType = "signup";
 
-    console.log(`OTP verifying with type: ${otpType}`, {
-      email: normalizedEmail,
-    });
+    console.log("OTP verifying with type: email", { email: normalizedEmail });
 
     const { data, error: verifyError } = await supabase.auth.verifyOtp({
       email: normalizedEmail,
       token: cleanOtpCode,
-      type: otpType,
+      type: "email",
     });
 
     if (verifyError || !data.user) {
@@ -103,24 +98,16 @@ export default function SignupPage() {
     setError("");
     setSuccessMessage("");
     setIsLoading(true);
-    const normalizedEmail = pendingEmail.trim().toLowerCase();
-    const otpType = "signup";
 
-    const { error: resendError } = await supabase.auth.resend({
-      email: normalizedEmail,
-      type: otpType,
-    });
-    console.log(`OTP sent with type: ${otpType}`, { email: normalizedEmail });
-
-    if (resendError) {
+    try {
+      await sendOtp(pendingEmail);
+      setSuccessMessage("A new verification code was sent.");
+      setResendCooldown(60);
+    } catch {
       setError("Could not resend the code. Try again in a moment.");
+    } finally {
       setIsLoading(false);
-      return;
     }
-
-    setSuccessMessage("A new verification code was sent.");
-    setResendCooldown(60);
-    setIsLoading(false);
   }
 
   useEffect(() => {
@@ -202,7 +189,7 @@ export default function SignupPage() {
             </button>
           </form>
         ) : (
-          <form onSubmit={handleSignup} className="mt-8 flex flex-col gap-4">
+          <form onSubmit={handleSendOtp} className="mt-8 flex flex-col gap-4">
             <input
               value={email}
               onChange={(event) => setEmail(event.target.value)}
@@ -211,29 +198,13 @@ export default function SignupPage() {
               type="email"
               required
             />
-            <input
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="min-h-14 rounded-2xl border border-zinc-800 bg-zinc-900 px-4 text-lg outline-none transition placeholder:text-zinc-500 focus:border-red-400"
-              placeholder="Password"
-              type="password"
-              required
-            />
-            <input
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              className="min-h-14 rounded-2xl border border-zinc-800 bg-zinc-900 px-4 text-lg outline-none transition placeholder:text-zinc-500 focus:border-red-400"
-              placeholder="Confirm password"
-              type="password"
-              required
-            />
 
             <button
               disabled={isLoading}
               className="min-h-16 rounded-2xl bg-red-500 px-6 text-lg font-bold text-white shadow-lg shadow-red-950/40 transition hover:bg-red-400 disabled:cursor-not-allowed disabled:bg-zinc-700 active:scale-[0.98]"
               type="submit"
             >
-              {isLoading ? "Sending code..." : "Sign Up"}
+              {isLoading ? "Sending code..." : "Send Code"}
             </button>
           </form>
         )}
