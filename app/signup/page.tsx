@@ -31,13 +31,11 @@ export default function SignupPage() {
 
     setIsLoading(true);
     const normalizedEmail = email.trim().toLowerCase();
-    const otpType = "email";
+    const otpType = "signup";
 
-    const { error: signupError } = await supabase.auth.signInWithOtp({
+    const { data, error: signupError } = await supabase.auth.signUp({
       email: normalizedEmail,
-      options: {
-        shouldCreateUser: true,
-      },
+      password,
     });
     console.log(`OTP sent with type: ${otpType}`, { email: normalizedEmail });
 
@@ -45,6 +43,10 @@ export default function SignupPage() {
       setError(signupError.message);
       setIsLoading(false);
       return;
+    }
+
+    if (data.session) {
+      await supabase.auth.signOut();
     }
 
     setPendingEmail(normalizedEmail);
@@ -62,7 +64,7 @@ export default function SignupPage() {
     setIsLoading(true);
     const normalizedEmail = pendingEmail.trim().toLowerCase();
     const cleanOtpCode = otpCode.replace(/\s/g, "").trim();
-    const otpType = "email";
+    const otpType = "signup";
 
     console.log(`OTP verifying with type: ${otpType}`, {
       email: normalizedEmail,
@@ -102,13 +104,11 @@ export default function SignupPage() {
     setSuccessMessage("");
     setIsLoading(true);
     const normalizedEmail = pendingEmail.trim().toLowerCase();
-    const otpType = "email";
+    const otpType = "signup";
 
-    const { error: resendError } = await supabase.auth.signInWithOtp({
+    const { error: resendError } = await supabase.auth.resend({
       email: normalizedEmail,
-      options: {
-        shouldCreateUser: true,
-      },
+      type: otpType,
     });
     console.log(`OTP sent with type: ${otpType}`, { email: normalizedEmail });
 
