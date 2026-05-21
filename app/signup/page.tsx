@@ -59,15 +59,25 @@ export default function SignupPage() {
     event.preventDefault();
     setError("");
     setIsLoading(true);
+    const cleanOtpCode = otpCode.replace(/\s/g, "").trim();
 
     const { data, error: verifyError } = await supabase.auth.verifyOtp({
       email: pendingEmail,
-      token: otpCode.trim(),
-      type: "email",
+      token: cleanOtpCode,
+      type: "signup",
     });
 
     if (verifyError || !data.user) {
-      setError("That code did not work. Check your email and try again.");
+      console.error("Supabase OTP verification error", verifyError);
+      setError(
+        verifyError
+          ? [
+              `message: ${verifyError.message}`,
+              `status: ${"status" in verifyError ? verifyError.status : "n/a"}`,
+              `name: ${verifyError.name ?? "n/a"}`,
+            ].join(" | ")
+          : "No user returned from OTP verification.",
+      );
       setIsLoading(false);
       return;
     }
@@ -162,7 +172,7 @@ export default function SignupPage() {
             <input
               value={otpCode}
               onChange={(event) => {
-                setOtpCode(event.target.value.replace(/\D/g, ""));
+                setOtpCode(event.target.value.replace(/\s/g, "").replace(/\D/g, ""));
                 setError("");
               }}
               className="min-h-16 rounded-2xl border border-zinc-800 bg-zinc-900 px-4 text-center text-2xl font-black tracking-[0.4em] outline-none transition placeholder:tracking-normal placeholder:text-zinc-500 focus:border-red-400"
