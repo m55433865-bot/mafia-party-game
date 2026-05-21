@@ -24,7 +24,20 @@ export default function LoginPage() {
     });
 
     if (loginError || !data.user) {
-      setError(loginError?.message ?? "Could not log in.");
+      const message = loginError?.message.toLowerCase() ?? "";
+
+      setError(
+        message.includes("email") && message.includes("confirm")
+          ? "Please confirm your email first."
+          : loginError?.message ?? "Could not log in.",
+      );
+      setIsLoading(false);
+      return;
+    }
+
+    if (!data.user.email_confirmed_at) {
+      await supabase.auth.signOut();
+      setError("Please confirm your email first.");
       setIsLoading(false);
       return;
     }

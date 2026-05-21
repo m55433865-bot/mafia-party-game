@@ -1,25 +1,34 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { ensureMafiaProfile } from "../lib/mafiaProfile";
 import { supabase } from "../lib/supabase";
 
 export default function SignupPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
 
   async function handleSignup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    setSuccessMessage("");
+
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+
     setIsLoading(true);
 
     const { data, error: signupError } = await supabase.auth.signUp({
       email,
+      options: {
+        emailRedirectTo: "https://mafia.yourteck.com/login",
+      },
       password,
     });
 
@@ -29,17 +38,15 @@ export default function SignupPage() {
       return;
     }
 
-    try {
-      if (data.user) {
-        await ensureMafiaProfile(data.user);
-      }
-    } catch {
-      setError("Account created, but profile setup needs another try.");
-      setIsLoading(false);
-      return;
+    if (data.session) {
+      await supabase.auth.signOut();
     }
 
-    router.push("/profile");
+    setSuccessMessage("Check your email to confirm your account before logging in.");
+    setEmail("");
+    setPassword("");
+    setConfirmPassword("");
+    setIsLoading(false);
   }
 
   async function handleGoogleSignup() {
@@ -84,6 +91,14 @@ export default function SignupPage() {
             type="password"
             required
           />
+          <input
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            className="min-h-14 rounded-2xl border border-zinc-800 bg-zinc-900 px-4 text-lg outline-none transition placeholder:text-zinc-500 focus:border-red-400"
+            placeholder="Confirm password"
+            type="password"
+            required
+          />
 
           <button
             disabled={isLoading}
@@ -102,6 +117,12 @@ export default function SignupPage() {
         >
           Continue with Google
         </button>
+
+        {successMessage ? (
+          <p className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm font-bold text-emerald-100">
+            {successMessage}
+          </p>
+        ) : null}
 
         {error ? <p className="mt-4 text-sm font-medium text-red-300">{error}</p> : null}
 
