@@ -10,6 +10,7 @@ export default function SignupPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [pendingEmail, setPendingEmail] = useState("");
+  const [pendingPassword, setPendingPassword] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
@@ -31,9 +32,11 @@ export default function SignupPage() {
 
     setIsLoading(true);
 
-    const { data, error: signupError } = await supabase.auth.signUp({
+    const { error: signupError } = await supabase.auth.signInWithOtp({
       email,
-      password,
+      options: {
+        shouldCreateUser: true,
+      },
     });
 
     if (signupError) {
@@ -42,11 +45,8 @@ export default function SignupPage() {
       return;
     }
 
-    if (data.session) {
-      await supabase.auth.signOut();
-    }
-
     setPendingEmail(email);
+    setPendingPassword(password);
     setShowOtpStep(true);
     setSuccessMessage("Check your email and enter the verification code.");
     setPassword("");
@@ -63,7 +63,7 @@ export default function SignupPage() {
     const { data, error: verifyError } = await supabase.auth.verifyOtp({
       email: pendingEmail,
       token: otpCode.trim(),
-      type: "signup",
+      type: "email",
     });
 
     if (verifyError || !data.user) {
@@ -72,7 +72,18 @@ export default function SignupPage() {
       return;
     }
 
+    const { error: passwordError } = await supabase.auth.updateUser({
+      password: pendingPassword,
+    });
+
+    if (passwordError) {
+      setError("Your email is verified, but the password could not be saved.");
+      setIsLoading(false);
+      return;
+    }
+
     await ensureMafiaProfile(data.user);
+    setPendingPassword("");
     router.push("/");
   }
 
@@ -85,9 +96,11 @@ export default function SignupPage() {
     setSuccessMessage("");
     setIsLoading(true);
 
-    const { error: resendError } = await supabase.auth.resend({
+    const { error: resendError } = await supabase.auth.signInWithOtp({
       email: pendingEmail,
-      type: "signup",
+      options: {
+        shouldCreateUser: true,
+      },
     });
 
     if (resendError) {
