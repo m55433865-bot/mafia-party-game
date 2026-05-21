@@ -84,6 +84,7 @@ export default function Home() {
       sessionStorage.setItem("playerName", currentPlayer.name);
       sessionStorage.setItem("roomCode", room.roomCode);
       sessionStorage.setItem("isHost", String(currentPlayer.isHost));
+      sessionStorage.setItem("avatarUrl", profile?.avatar_url ?? "");
       router.push(`/room/${room.roomCode}`);
     }
 
@@ -107,7 +108,7 @@ export default function Home() {
       socket.off("error-message", handleErrorMessage);
       socket.off("connect_error", handleConnectError);
     };
-  }, [router]);
+  }, [profile?.avatar_url, router]);
 
   function connectSocket() {
     if (!socket.connected) {
@@ -134,7 +135,10 @@ export default function Home() {
     }
 
     resetAndConnect();
-    socket.emit("create-room", { playerName });
+    socket.emit("create-room", {
+      avatarUrl: profile?.avatar_url ?? "",
+      playerName,
+    });
   }
 
   function handleJoinRoom() {
@@ -153,6 +157,7 @@ export default function Home() {
 
     resetAndConnect();
     socket.emit("join-room", {
+      avatarUrl: profile?.avatar_url ?? "",
       playerName,
       roomCode: nextRoomCode,
     });

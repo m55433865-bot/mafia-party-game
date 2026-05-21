@@ -536,7 +536,8 @@ app.prepare().then(() => {
 
   io.on("connection", (socket) => {
     // Host creates a room on the server so the code is real before navigation.
-    socket.on("create-room", ({ playerName }) => {
+    socket.on("create-room", ({ avatarUrl, playerName }) => {
+      const cleanAvatarUrl = String(avatarUrl ?? "").trim();
       const cleanPlayerName = String(playerName ?? "").trim();
 
       if (!cleanPlayerName) {
@@ -574,14 +575,15 @@ app.prepare().then(() => {
       const room = rooms.get(roomCode);
       const player = {
         alive: false,
+        avatarUrl: cleanAvatarUrl,
         color: getRandomAvailableColor(room),
-        icon: getRandomAvailableIcon(room),
+        icon: cleanAvatarUrl ? "" : getRandomAvailableIcon(room),
         id: socket.id,
         name: cleanPlayerName,
         isHost: true,
       };
 
-      if (!player.color || !player.icon) {
+      if (!player.color || (!player.avatarUrl && !player.icon)) {
         socket.emit("error-message", "Room is full.");
         rooms.delete(roomCode);
         return;
@@ -600,7 +602,8 @@ app.prepare().then(() => {
     });
 
     // Players can join only rooms already created in server memory.
-    socket.on("join-room", ({ playerName, roomCode }) => {
+    socket.on("join-room", ({ avatarUrl, playerName, roomCode }) => {
+      const cleanAvatarUrl = String(avatarUrl ?? "").trim();
       const cleanPlayerName = String(playerName ?? "").trim();
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
@@ -622,14 +625,15 @@ app.prepare().then(() => {
 
       const player = {
         alive: true,
+        avatarUrl: cleanAvatarUrl,
         color: getRandomAvailableColor(room),
-        icon: getRandomAvailableIcon(room),
+        icon: cleanAvatarUrl ? "" : getRandomAvailableIcon(room),
         id: socket.id,
         name: cleanPlayerName,
         isHost: room.hostId === socket.id,
       };
 
-      if (!player.color || !player.icon) {
+      if (!player.color || (!player.avatarUrl && !player.icon)) {
         socket.emit("error-message", "Room is full.");
         return;
       }
@@ -707,6 +711,11 @@ app.prepare().then(() => {
 
       if (!player) {
         socket.emit("error-message", "Player not found.");
+        return;
+      }
+
+      if (player.avatarUrl) {
+        socket.emit("error-message", "Profile photos replace face icons.");
         return;
       }
 

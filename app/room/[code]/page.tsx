@@ -17,6 +17,7 @@ import { supabase } from "../../lib/supabase";
 
 type Player = {
   alive: boolean;
+  avatarUrl: string;
   color: string;
   icon: string;
   id: string;
@@ -25,6 +26,7 @@ type Player = {
 };
 
 type RoomSession = {
+  avatarUrl: string;
   playerName: string;
   roomCode: string;
   isHost: boolean;
@@ -126,6 +128,7 @@ export default function RoomPage() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [allAlivePlayersVoted, setAllAlivePlayersVoted] = useState(false);
   const [authPlayerName, setAuthPlayerName] = useState("");
+  const [authAvatarUrl, setAuthAvatarUrl] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [confirmationResponses, setConfirmationResponses] = useState<string[]>([]);
   const [confirmationVoterIds, setConfirmationVoterIds] = useState<string[]>([]);
@@ -157,6 +160,7 @@ export default function RoomPage() {
   const [winner, setWinner] = useState("");
 
   const fallbackSession = JSON.stringify({
+    avatarUrl: "",
     playerName: "",
     roomCode: params.code.toUpperCase(),
     isHost: false,
@@ -173,6 +177,7 @@ export default function RoomPage() {
         sessionStorage.getItem("playerName") ??
         localStorage.getItem("playerName") ??
         "";
+      const savedAvatarUrl = sessionStorage.getItem("avatarUrl") ?? "";
       const savedRoomCode =
         sessionStorage.getItem("roomCode") ??
         localStorage.getItem("roomCode") ??
@@ -182,6 +187,7 @@ export default function RoomPage() {
         "true";
 
       return JSON.stringify({
+        avatarUrl: savedAvatarUrl,
         playerName: savedPlayerName,
         roomCode: savedRoomCode.toUpperCase(),
         isHost: savedIsHost,
@@ -196,10 +202,11 @@ export default function RoomPage() {
 
       return {
         ...savedSession,
+        avatarUrl: savedSession.avatarUrl || authAvatarUrl,
         playerName: savedSession.playerName || authPlayerName,
       };
     },
-    [authPlayerName, sessionSnapshot],
+    [authAvatarUrl, authPlayerName, sessionSnapshot],
   );
 
   useEffect(() => {
@@ -227,8 +234,11 @@ export default function RoomPage() {
       }
 
       const nextPlayerName = profile.display_name ?? "";
+      const nextAvatarUrl = profile.avatar_url ?? "";
+      sessionStorage.setItem("avatarUrl", nextAvatarUrl);
       sessionStorage.setItem("playerName", nextPlayerName);
       sessionStorage.setItem("roomCode", params.code.toUpperCase());
+      setAuthAvatarUrl(nextAvatarUrl);
       setAuthPlayerName(nextPlayerName);
       setIsAuthLoading(false);
     }
@@ -441,6 +451,7 @@ export default function RoomPage() {
 
     // Socket.io join keeps the room page synced after navigation or refresh.
     currentSocket.emit("join-room", {
+      avatarUrl: session.avatarUrl,
       playerName: session.playerName,
       roomCode: session.roomCode,
     });
@@ -455,7 +466,7 @@ export default function RoomPage() {
       currentSocket.off("detective-result", handleDetectiveResult);
       currentSocket.off("error-message", handleErrorMessage);
     };
-  }, [isAuthLoading, session.playerName, session.roomCode]);
+  }, [isAuthLoading, session.avatarUrl, session.playerName, session.roomCode]);
 
   useEffect(() => {
     if (!defenseEndsAt) {
@@ -475,6 +486,7 @@ export default function RoomPage() {
       : [
           {
             alive: true,
+            avatarUrl: session.avatarUrl,
             color: "#f5f5f4",
             icon: "🙂",
             id: "local-player",
@@ -507,6 +519,7 @@ export default function RoomPage() {
       .filter((player) => player.id !== socketId)
       .map((player) => player.icon),
   );
+  const currentPlayerHasProfilePhoto = Boolean(currentPlayer?.avatarUrl);
   const isCurrentPlayerAlive = currentPlayer?.isHost
     ? true
     : (currentPlayer?.alive ?? true);
@@ -665,6 +678,7 @@ export default function RoomPage() {
   function handleLeaveLobby() {
     setError("");
     sessionStorage.removeItem("playerName");
+    sessionStorage.removeItem("avatarUrl");
     sessionStorage.removeItem("roomCode");
     sessionStorage.removeItem("isHost");
 
@@ -703,13 +717,28 @@ export default function RoomPage() {
         }`}
         style={{ color: player.color }}
       >
-        <span
-          className={`text-xl leading-none ${
-            !player.isHost && !player.alive ? "dead-icon-mark" : ""
-          }`}
-        >
-          {player.icon}
-        </span>
+        {player.avatarUrl ? (
+          <span
+            className={`relative h-7 w-7 shrink-0 ${
+              !player.isHost && !player.alive ? "dead-icon-mark" : ""
+            }`}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              alt=""
+              className="h-full w-full rounded-full border border-white/10 object-cover"
+              src={player.avatarUrl}
+            />
+          </span>
+        ) : (
+          <span
+            className={`relative text-xl leading-none ${
+              !player.isHost && !player.alive ? "dead-icon-mark" : ""
+            }`}
+          >
+            {player.icon}
+          </span>
+        )}
         <span className={!player.isHost && !player.alive ? "line-through" : ""}>
           {player.name}
         </span>
@@ -831,7 +860,7 @@ export default function RoomPage() {
               </div>
             ) : null}
 
-            {playerIcons.length > 0 ? (
+            {playerIcons.length > 0 && !currentPlayerHasProfilePhoto ? (
               <div className="mt-6">
                 <p className="text-sm text-zinc-400">Face icon</p>
                 <div className="mt-3 grid grid-cols-5 gap-3">
