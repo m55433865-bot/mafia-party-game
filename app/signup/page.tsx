@@ -10,7 +10,6 @@ export default function SignupPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [pendingEmail, setPendingEmail] = useState("");
-  const [pendingPassword, setPendingPassword] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
@@ -31,13 +30,16 @@ export default function SignupPage() {
     }
 
     setIsLoading(true);
+    const normalizedEmail = email.trim().toLowerCase();
+    const otpType = "email";
 
     const { error: signupError } = await supabase.auth.signInWithOtp({
-      email,
+      email: normalizedEmail,
       options: {
         shouldCreateUser: true,
       },
     });
+    console.log(`OTP sent with type: ${otpType}`, { email: normalizedEmail });
 
     if (signupError) {
       setError(signupError.message);
@@ -45,8 +47,7 @@ export default function SignupPage() {
       return;
     }
 
-    setPendingEmail(email);
-    setPendingPassword(password);
+    setPendingEmail(normalizedEmail);
     setShowOtpStep(true);
     setSuccessMessage("Check your email and enter the verification code.");
     setPassword("");
@@ -59,12 +60,18 @@ export default function SignupPage() {
     event.preventDefault();
     setError("");
     setIsLoading(true);
+    const normalizedEmail = pendingEmail.trim().toLowerCase();
     const cleanOtpCode = otpCode.replace(/\s/g, "").trim();
+    const otpType = "email";
+
+    console.log(`OTP verifying with type: ${otpType}`, {
+      email: normalizedEmail,
+    });
 
     const { data, error: verifyError } = await supabase.auth.verifyOtp({
-      email: pendingEmail,
+      email: normalizedEmail,
       token: cleanOtpCode,
-      type: "signup",
+      type: otpType,
     });
 
     if (verifyError || !data.user) {
@@ -82,18 +89,7 @@ export default function SignupPage() {
       return;
     }
 
-    const { error: passwordError } = await supabase.auth.updateUser({
-      password: pendingPassword,
-    });
-
-    if (passwordError) {
-      setError("Your email is verified, but the password could not be saved.");
-      setIsLoading(false);
-      return;
-    }
-
     await ensureMafiaProfile(data.user);
-    setPendingPassword("");
     router.push("/");
   }
 
@@ -105,13 +101,16 @@ export default function SignupPage() {
     setError("");
     setSuccessMessage("");
     setIsLoading(true);
+    const normalizedEmail = pendingEmail.trim().toLowerCase();
+    const otpType = "email";
 
     const { error: resendError } = await supabase.auth.signInWithOtp({
-      email: pendingEmail,
+      email: normalizedEmail,
       options: {
         shouldCreateUser: true,
       },
     });
+    console.log(`OTP sent with type: ${otpType}`, { email: normalizedEmail });
 
     if (resendError) {
       setError("Could not resend the code. Try again in a moment.");
