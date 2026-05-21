@@ -84,6 +84,24 @@ type RoleCard = {
 
 let pendingLeaveTimeout: number | null = null;
 
+const fallbackPlayerColors = [
+  "#f87171",
+  "#fb923c",
+  "#facc15",
+  "#a3e635",
+  "#34d399",
+  "#2dd4bf",
+  "#38bdf8",
+  "#60a5fa",
+  "#818cf8",
+  "#a78bfa",
+  "#c084fc",
+  "#e879f9",
+  "#f472b6",
+  "#fb7185",
+  "#f5f5f4",
+];
+
 function getRoleCard(role: string): RoleCard {
   if (role === "Mafia") {
     return {
@@ -514,6 +532,8 @@ export default function RoomPage() {
       .filter((player) => player.id !== socketId)
       .map((player) => player.color),
   );
+  const availablePlayerColors =
+    playerColors.length > 0 ? playerColors : fallbackPlayerColors;
   const usedIcons = new Set(
     currentPlayers
       .filter((player) => player.id !== socketId)
@@ -832,33 +852,31 @@ export default function RoomPage() {
               {gamePlayers.length} {gamePlayers.length === 1 ? "player" : "players"}
             </p>
 
-            {playerColors.length > 0 ? (
-              <div className="mt-6">
-                <p className="text-sm text-zinc-400">Name color</p>
-                <div className="mt-3 grid grid-cols-5 gap-3">
-                  {playerColors.map((color) => {
-                    const isTaken = usedColors.has(color);
-                    const isSelected = currentPlayer?.color === color;
+            <div className="mt-6">
+              <p className="text-sm text-zinc-400">Name color</p>
+              <div className="mt-3 grid grid-cols-5 gap-3">
+                {availablePlayerColors.map((color) => {
+                  const isTaken = usedColors.has(color);
+                  const isSelected = currentPlayer?.color === color;
 
-                    return (
-                      <button
-                        key={color}
-                        onClick={() => handleChangeColor(color)}
-                        disabled={isTaken}
-                        aria-label={`Choose ${color}`}
-                        className={`h-10 rounded-xl border transition disabled:cursor-not-allowed disabled:opacity-25 ${
-                          isSelected
-                            ? "border-white ring-2 ring-white/30"
-                            : "border-zinc-700"
-                        }`}
-                        style={{ backgroundColor: color }}
-                        type="button"
-                      />
-                    );
-                  })}
-                </div>
+                  return (
+                    <button
+                      key={color}
+                      onClick={() => handleChangeColor(color)}
+                      disabled={isTaken}
+                      aria-label={`Choose ${color}`}
+                      className={`h-10 rounded-xl border transition disabled:cursor-not-allowed disabled:opacity-25 ${
+                        isSelected
+                          ? "border-white ring-2 ring-white/30"
+                          : "border-zinc-700"
+                      }`}
+                      style={{ backgroundColor: color }}
+                      type="button"
+                    />
+                  );
+                })}
               </div>
-            ) : null}
+            </div>
 
             {playerIcons.length > 0 && !currentPlayerHasProfilePhoto ? (
               <div className="mt-6">
