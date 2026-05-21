@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { getOrCreateMafiaProfile } from "../lib/mafiaProfile";
+import { ensureMafiaProfile } from "../lib/mafiaProfile";
 import { supabase } from "../lib/supabase";
 
 export default function SignupPage() {
@@ -29,11 +29,17 @@ export default function SignupPage() {
       return;
     }
 
-    if (data.user) {
-      await getOrCreateMafiaProfile(data.user);
+    try {
+      if (data.user) {
+        await ensureMafiaProfile(data.user);
+      }
+    } catch {
+      setError("Account created, but profile setup needs another try.");
+      setIsLoading(false);
+      return;
     }
 
-    router.push("/");
+    router.push("/profile");
   }
 
   async function handleGoogleSignup() {
@@ -42,7 +48,7 @@ export default function SignupPage() {
 
     const { error: googleError } = await supabase.auth.signInWithOAuth({
       options: {
-        redirectTo: `${window.location.origin}/`,
+        redirectTo: `${window.location.origin}/profile`,
       },
       provider: "google",
     });

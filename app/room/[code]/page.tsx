@@ -8,7 +8,12 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import {
+  ensureMafiaProfile,
+  isMafiaProfileComplete,
+} from "../../lib/mafiaProfile";
 import { socket } from "../../lib/socket";
+import { supabase } from "../../lib/supabase";
 
 type Player = {
   alive: boolean;
@@ -120,6 +125,8 @@ export default function RoomPage() {
   const previousAliveRef = useRef<Record<string, boolean> | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [allAlivePlayersVoted, setAllAlivePlayersVoted] = useState(false);
+  const [authPlayerName, setAuthPlayerName] = useState("");
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [confirmationResponses, setConfirmationResponses] = useState<string[]>([]);
   const [confirmationVoterIds, setConfirmationVoterIds] = useState<string[]>([]);
   const [defenseEndsAt, setDefenseEndsAt] = useState(0);
@@ -184,12 +191,64 @@ export default function RoomPage() {
   );
 
   const session = useMemo<RoomSession>(
-    () => JSON.parse(sessionSnapshot) as RoomSession,
-    [sessionSnapshot],
+    () => {
+      const savedSession = JSON.parse(sessionSnapshot) as RoomSession;
+
+      return {
+        ...savedSession,
+        playerName: savedSession.playerName || authPlayerName,
+      };
+    },
+    [authPlayerName, sessionSnapshot],
   );
 
   useEffect(() => {
-    if (!session.playerName) {
+    let isMounted = true;
+
+    async function requireUserProfile() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        router.replace("/login");
+        return;
+      }
+
+      const profile = await ensureMafiaProfile(user);
+
+      if (!isMafiaProfileComplete(profile)) {
+        router.replace("/profile");
+        return;
+      }
+
+      if (!isMounted) {
+        return;
+      }
+
+      const nextPlayerName = profile.display_name ?? "";
+      sessionStorage.setItem("playerName", nextPlayerName);
+      sessionStorage.setItem("roomCode", params.code.toUpperCase());
+      setAuthPlayerName(nextPlayerName);
+      setIsAuthLoading(false);
+    }
+
+    requireUserProfile().catch(() => {
+      if (!isMounted) {
+        return;
+      }
+
+      setError("Could not load your account.");
+      setIsAuthLoading(false);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [params.code, router]);
+
+  useEffect(() => {
+    if (isAuthLoading || !session.playerName) {
       return;
     }
 
@@ -396,7 +455,7 @@ export default function RoomPage() {
       currentSocket.off("detective-result", handleDetectiveResult);
       currentSocket.off("error-message", handleErrorMessage);
     };
-  }, [session.playerName, session.roomCode]);
+  }, [isAuthLoading, session.playerName, session.roomCode]);
 
   useEffect(() => {
     if (!defenseEndsAt) {
@@ -655,6 +714,14 @@ export default function RoomPage() {
           {player.name}
         </span>
       </span>
+    );
+  }
+
+  if (isAuthLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-5 py-10 text-white">
+        <p className="text-sm font-medium text-zinc-400">Checking account...</p>
+      </main>
     );
   }
 

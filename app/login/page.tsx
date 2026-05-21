@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { getOrCreateMafiaProfile } from "../lib/mafiaProfile";
+import { ensureMafiaProfile, isMafiaProfileComplete } from "../lib/mafiaProfile";
 import { supabase } from "../lib/supabase";
 
 export default function LoginPage() {
@@ -29,8 +29,13 @@ export default function LoginPage() {
       return;
     }
 
-    await getOrCreateMafiaProfile(data.user);
-    router.push("/");
+    try {
+      const profile = await ensureMafiaProfile(data.user);
+      router.push(isMafiaProfileComplete(profile) ? "/" : "/profile");
+    } catch {
+      setError("Could not load your game profile.");
+      setIsLoading(false);
+    }
   }
 
   async function handleGoogleLogin() {
@@ -39,7 +44,7 @@ export default function LoginPage() {
 
     const { error: googleError } = await supabase.auth.signInWithOAuth({
       options: {
-        redirectTo: `${window.location.origin}/`,
+        redirectTo: `${window.location.origin}/profile`,
       },
       provider: "google",
     });

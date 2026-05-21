@@ -9,61 +9,73 @@ export type MafiaProfile = {
   id: string;
 };
 
-function getDefaultDisplayName(user: User) {
-  const metadata = user.user_metadata;
-  const googleName =
-    typeof metadata.full_name === "string"
-      ? metadata.full_name
-      : typeof metadata.name === "string"
-        ? metadata.name
-        : "";
-  const emailPrefix = user.email?.split("@")[0] ?? "Player";
+const mafiaProfileSelect = "id, display_name, avatar_url, games_played, games_won";
 
-  return googleName || emailPrefix;
+export function isMafiaProfileComplete(profile: MafiaProfile | null) {
+  return Boolean(profile?.display_name?.trim() && profile.avatar_url?.trim());
 }
 
-function getDefaultAvatarUrl(user: User) {
-  const metadata = user.user_metadata;
-
-  if (typeof metadata.avatar_url === "string") {
-    return metadata.avatar_url;
-  }
-
-  if (typeof metadata.picture === "string") {
-    return metadata.picture;
-  }
-
-  return null;
-}
-
-export async function getOrCreateMafiaProfile(user: User) {
-  const { data: existingProfile, error: selectError } = await supabase
+export async function getMafiaProfile(userId: string) {
+  const { data, error } = await supabase
     .from("mafia_profiles")
-    .select("id, display_name, avatar_url, games_played, games_won")
-    .eq("id", user.id)
+    .select(mafiaProfileSelect)
+    .eq("id", userId)
     .maybeSingle<MafiaProfile>();
 
-  if (selectError) {
-    throw selectError;
+  if (error) {
+    throw error;
   }
+
+  return data;
+}
+
+export async function ensureMafiaProfile(user: User) {
+  const existingProfile = await getMafiaProfile(user.id);
 
   if (existingProfile) {
     return existingProfile;
   }
 
-  const { data: createdProfile, error: insertError } = await supabase
+  const { data, error } = await supabase
     .from("mafia_profiles")
     .insert({
-      avatar_url: getDefaultAvatarUrl(user),
-      display_name: getDefaultDisplayName(user),
+      avatar_url: null,
+      display_name: null,
       id: user.id,
     })
-    .select("id, display_name, avatar_url, games_played, games_won")
+    .select(mafiaProfileSelect)
     .single<MafiaProfile>();
 
-  if (insertError) {
-    throw insertError;
+  if (error) {
+    throw error;
   }
 
-  return createdProfile;
+  return data;
+}
+
+export async function saveMafiaProfile({
+  avatarUrl,
+  displayName,
+  userId,
+}: {
+  avatarUrl: string;
+  displayName: string;
+  userId: string;
+}) {
+  const { data, error } = await supabase
+    .from("mafia_profiles")
+    .upsert({
+      avatar_url: avatarUrl.trim(),
+      display_name: displayName.trim(),
+      id: userId,
+      updated_at: new Date().toISOString(),
+    })
+    .select(mafiaProfileSelect)
+    .single<MafiaProfile>();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
 }

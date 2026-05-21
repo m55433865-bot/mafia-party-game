@@ -2,7 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { getOrCreateMafiaProfile } from "./lib/mafiaProfile";
+import type { MafiaProfile } from "./lib/mafiaProfile";
+import {
+  ensureMafiaProfile,
+  isMafiaProfileComplete,
+} from "./lib/mafiaProfile";
 import { socket } from "./lib/socket";
 import { supabase } from "./lib/supabase";
 
@@ -19,10 +23,55 @@ type RoomUpdate = {
 
 export default function Home() {
   const router = useRouter();
-  const [playerName, setPlayerName] = useState("");
+  const [profile, setProfile] = useState<MafiaProfile | null>(null);
+  const [userEmail, setUserEmail] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [error, setError] = useState("");
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function requireUserProfile() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        router.replace("/login");
+        return;
+      }
+
+      const mafiaProfile = await ensureMafiaProfile(user);
+
+      if (!isMafiaProfileComplete(mafiaProfile)) {
+        router.replace("/profile");
+        return;
+      }
+
+      if (!isMounted) {
+        return;
+      }
+
+      setProfile(mafiaProfile);
+      setUserEmail(user.email ?? "");
+      setIsAuthLoading(false);
+    }
+
+    requireUserProfile().catch(() => {
+      if (!isMounted) {
+        return;
+      }
+
+      setError("Could not load your account.");
+      setIsAuthLoading(false);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [router]);
 
   useEffect(() => {
     function handleRoomUpdated(room: RoomUpdate) {
@@ -60,58 +109,6 @@ export default function Home() {
     };
   }, [router]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadMafiaProfile() {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user || !isMounted) {
-        return;
-      }
-
-      const profile = await getOrCreateMafiaProfile(user);
-
-      if (!isMounted || !profile.display_name) {
-        return;
-      }
-
-      setPlayerName((currentName) => currentName || profile.display_name || "");
-    }
-
-    loadMafiaProfile().catch(() => {
-      // Guest play stays available if profile loading fails.
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session?.user) {
-        return;
-      }
-
-      getOrCreateMafiaProfile(session.user)
-        .then((profile) => {
-          if (!isMounted || !profile.display_name) {
-            return;
-          }
-
-          setPlayerName((currentName) => currentName || profile.display_name || "");
-        })
-        .catch(() => {
-          // Guest play stays available if profile loading fails.
-        });
-    });
-
-    return () => {
-      isMounted = false;
-      subscription.unsubscribe();
-    };
-  }, []);
-
   function connectSocket() {
     if (!socket.connected) {
       socket.connect();
@@ -124,9 +121,15 @@ export default function Home() {
     connectSocket();
   }
 
+  function getPlayerName() {
+    return profile?.display_name?.trim() ?? "";
+  }
+
   function handleCreateRoom() {
-    if (!playerName.trim()) {
-      setError("Enter your name first.");
+    const playerName = getPlayerName();
+
+    if (!playerName) {
+      router.push("/profile");
       return;
     }
 
@@ -135,10 +138,16 @@ export default function Home() {
   }
 
   function handleJoinRoom() {
+    const playerName = getPlayerName();
     const nextRoomCode = roomCode.trim().toUpperCase();
 
-    if (!playerName.trim() || !nextRoomCode) {
-      setError("Enter your name and room code.");
+    if (!playerName) {
+      router.push("/profile");
+      return;
+    }
+
+    if (!nextRoomCode) {
+      setError("Enter the room code.");
       return;
     }
 
@@ -147,6 +156,21 @@ export default function Home() {
       playerName,
       roomCode: nextRoomCode,
     });
+  }
+
+  async function handleLogout() {
+    sessionStorage.clear();
+    socket.disconnect();
+    await supabase.auth.signOut();
+    router.replace("/login");
+  }
+
+  if (isAuthLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-5 py-10 text-white">
+        <p className="text-sm font-medium text-zinc-400">Checking account...</p>
+      </main>
+    );
   }
 
   return (
@@ -165,25 +189,36 @@ export default function Home() {
           and play Mafia together around the table.
         </p>
 
-        <div className="mt-10 flex w-full flex-col gap-4">
-          <label className="text-left text-sm font-medium text-zinc-300">
-            Player name
-            <input
-              value={playerName}
-              onChange={(event) => {
-                setPlayerName(event.target.value);
-                setError("");
-              }}
-              className="mt-2 min-h-14 w-full rounded-2xl border border-zinc-800 bg-zinc-900 px-4 text-lg text-white outline-none transition placeholder:text-zinc-500 focus:border-red-400"
-              placeholder="Enter your name"
-              type="text"
-            />
-          </label>
+        <div className="mt-8 w-full rounded-2xl border border-zinc-800 bg-zinc-900 p-4 text-left">
+          <p className="text-sm text-zinc-400">Signed in as</p>
+          <div className="mt-3 flex items-center gap-3">
+            {profile?.avatar_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                alt=""
+                className="h-12 w-12 rounded-xl object-cover"
+                src={profile.avatar_url}
+              />
+            ) : null}
+            <div>
+              <p className="text-lg font-bold">{profile?.display_name}</p>
+              <p className="text-sm text-zinc-500">{userEmail}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => router.push("/profile")}
+            className="mt-4 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 text-sm font-bold text-zinc-100 transition hover:border-zinc-500"
+            type="button"
+          >
+            Edit Profile
+          </button>
+        </div>
 
+        <div className="mt-6 flex w-full flex-col gap-4">
           <button
             onClick={handleCreateRoom}
             disabled={isLoading}
-            className="min-h-16 rounded-2xl bg-red-500 px-6 text-lg font-bold text-white shadow-lg shadow-red-950/40 transition hover:bg-red-400 active:scale-[0.98]"
+            className="min-h-16 rounded-2xl bg-red-500 px-6 text-lg font-bold text-white shadow-lg shadow-red-950/40 transition hover:bg-red-400 disabled:cursor-not-allowed disabled:bg-zinc-700 active:scale-[0.98]"
           >
             {isLoading ? "Connecting..." : "Create Room"}
           </button>
@@ -211,6 +246,14 @@ export default function Home() {
             className="min-h-16 rounded-2xl border border-zinc-700 bg-zinc-900 px-6 text-lg font-bold text-zinc-100 transition hover:border-zinc-500 hover:bg-zinc-800 active:scale-[0.98]"
           >
             Join Room
+          </button>
+
+          <button
+            onClick={handleLogout}
+            className="min-h-14 rounded-2xl border border-zinc-800 bg-zinc-950 px-6 text-base font-bold text-zinc-300 transition hover:border-zinc-600 hover:text-white"
+            type="button"
+          >
+            Logout
           </button>
 
           {error ? (
