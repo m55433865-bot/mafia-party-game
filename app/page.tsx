@@ -118,20 +118,13 @@ export default function Home() {
       setIsLoading(false);
     }
 
-    function handleConnectError() {
-      setError("Could not connect to the game server.");
-      setIsLoading(false);
-    }
-
     // Socket.io events drive room creation and joining from the homepage.
     socket.on("room-updated", handleRoomUpdated);
     socket.on("error-message", handleErrorMessage);
-    socket.on("connect_error", handleConnectError);
 
     return () => {
       socket.off("room-updated", handleRoomUpdated);
       socket.off("error-message", handleErrorMessage);
-      socket.off("connect_error", handleConnectError);
     };
   }, [profile?.avatar_url, router]);
 
@@ -191,7 +184,11 @@ export default function Home() {
               playerName,
               roomCode: response.roomCode,
             });
+            return;
           }
+
+          setError("The server did not return a room code.");
+          setIsLoading(false);
         },
       );
     } catch (error) {
@@ -255,7 +252,11 @@ export default function Home() {
               playerName,
               roomCode: response.roomCode,
             });
+            return;
           }
+
+          setError("The server did not return a room code.");
+          setIsLoading(false);
         },
       );
     } catch (error) {

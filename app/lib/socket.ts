@@ -63,7 +63,6 @@ export function connectSocketWithTimeout(timeoutMs = 10000) {
     function cleanup() {
       window.clearTimeout(timeout);
       socket.off("connect", handleConnect);
-      socket.off("connect_error", handleConnectError);
     }
 
     function handleConnect() {
@@ -76,13 +75,7 @@ export function connectSocketWithTimeout(timeoutMs = 10000) {
       resolve();
     }
 
-    function handleConnectError(error: Error) {
-      cleanup();
-      reject(error);
-    }
-
     socket.once("connect", handleConnect);
-    socket.once("connect_error", handleConnectError);
     socket.connect();
   });
 }
