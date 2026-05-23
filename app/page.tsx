@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MafiaProfile } from "./lib/mafiaProfile";
 import {
   ensureMafiaProfile,
@@ -34,23 +34,14 @@ export default function Home() {
   const [error, setError] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("");
+  const pendingActionTimeoutRef = useRef<number | null>(null);
 
-  function enterRoom({
-    avatarUrl,
-    isHost,
-    playerName,
-    roomCode,
-  }: {
-    avatarUrl: string;
-    isHost: boolean;
-    playerName: string;
-    roomCode: string;
-  }) {
-    sessionStorage.setItem("playerName", playerName);
-    sessionStorage.setItem("roomCode", roomCode);
-    sessionStorage.setItem("isHost", String(isHost));
-    sessionStorage.setItem("avatarUrl", avatarUrl);
-    router.push(`/room/${roomCode}`);
+  function clearPendingActionTimeout() {
+    if (pendingActionTimeoutRef.current) {
+      window.clearTimeout(pendingActionTimeoutRef.current);
+      pendingActionTimeoutRef.current = null;
+    }
   }
 
   useEffect(() => {
@@ -110,12 +101,16 @@ export default function Home() {
       sessionStorage.setItem("roomCode", room.roomCode);
       sessionStorage.setItem("isHost", String(currentPlayer.isHost));
       sessionStorage.setItem("avatarUrl", profile?.avatar_url ?? "");
+      clearPendingActionTimeout();
+      setLoadingMessage("Opening room...");
       router.push(`/room/${room.roomCode}`);
     }
 
     function handleErrorMessage(message: string) {
       setError(message);
       setIsLoading(false);
+      setLoadingMessage("");
+      clearPendingActionTimeout();
     }
 
     // Socket.io events drive room creation and joining from the homepage.
@@ -123,6 +118,7 @@ export default function Home() {
     socket.on("error-message", handleErrorMessage);
 
     return () => {
+      clearPendingActionTimeout();
       socket.off("room-updated", handleRoomUpdated);
       socket.off("error-message", handleErrorMessage);
     };
@@ -131,7 +127,9 @@ export default function Home() {
   async function resetAndConnect() {
     setError("");
     setIsLoading(true);
+    setLoadingMessage("Connecting to server...");
     await connectSocketWithTimeout();
+    setLoadingMessage("Creating room...");
   }
 
   function getPlayerName() {
@@ -149,53 +147,32 @@ export default function Home() {
     try {
       const startedAt = performance.now();
       await resetAndConnect();
-      socket.timeout(8000).emit(
-        "create-room",
-        {
-          avatarUrl: profile?.avatar_url ?? "",
-          playerId: getStablePlayerId(),
-          playerName,
-        },
-        (
-          error: Error | null,
-          response?: {
-            error?: string;
-            isHost?: boolean;
-            ok: boolean;
-            roomCode?: string;
-          },
-        ) => {
-          console.log("create-room response", {
-            elapsedMs: Math.round(performance.now() - startedAt),
-            error: error?.message,
-            ok: response?.ok,
-          });
+      socket.emit("create-room", {
+        avatarUrl: profile?.avatar_url ?? "",
+        playerId: getStablePlayerId(),
+        playerName,
+      });
+      clearPendingActionTimeout();
+      pendingActionTimeoutRef.current = window.setTimeout(() => {
+        if (!socket.connected) {
+          return;
+        }
 
-          if (error || response?.error) {
-            setError(response?.error ?? "Could not create the room.");
-            setIsLoading(false);
-            return;
-          }
-
-          if (response?.ok && response.roomCode) {
-            enterRoom({
-              avatarUrl: profile?.avatar_url ?? "",
-              isHost: response.isHost ?? true,
-              playerName,
-              roomCode: response.roomCode,
-            });
-            return;
-          }
-
-          setError("The server did not return a room code.");
-          setIsLoading(false);
-        },
-      );
+        setError("Room create request was sent, but the server did not answer.");
+        setIsLoading(false);
+        setLoadingMessage("");
+        console.log("create-room no response", {
+          elapsedMs: Math.round(performance.now() - startedAt),
+          socketId: socket.id,
+        });
+      }, 8000);
     } catch (error) {
       setError(
         error instanceof Error ? error.message : "Could not connect to the game server.",
       );
       setIsLoading(false);
+      setLoadingMessage("");
+      clearPendingActionTimeout();
     }
   }
 
@@ -216,54 +193,34 @@ export default function Home() {
     try {
       const startedAt = performance.now();
       await resetAndConnect();
-      socket.timeout(8000).emit(
-        "join-room",
-        {
-          avatarUrl: profile?.avatar_url ?? "",
-          playerId: getStablePlayerId(),
-          playerName,
-          roomCode: nextRoomCode,
-        },
-        (
-          error: Error | null,
-          response?: {
-            error?: string;
-            isHost?: boolean;
-            ok: boolean;
-            roomCode?: string;
-          },
-        ) => {
-          console.log("join-room response", {
-            elapsedMs: Math.round(performance.now() - startedAt),
-            error: error?.message,
-            ok: response?.ok,
-          });
+      setLoadingMessage("Joining room...");
+      socket.emit("join-room", {
+        avatarUrl: profile?.avatar_url ?? "",
+        playerId: getStablePlayerId(),
+        playerName,
+        roomCode: nextRoomCode,
+      });
+      clearPendingActionTimeout();
+      pendingActionTimeoutRef.current = window.setTimeout(() => {
+        if (!socket.connected) {
+          return;
+        }
 
-          if (error || response?.error) {
-            setError(response?.error ?? "Could not join the room.");
-            setIsLoading(false);
-            return;
-          }
-
-          if (response?.ok && response.roomCode) {
-            enterRoom({
-              avatarUrl: profile?.avatar_url ?? "",
-              isHost: response.isHost ?? false,
-              playerName,
-              roomCode: response.roomCode,
-            });
-            return;
-          }
-
-          setError("The server did not return a room code.");
-          setIsLoading(false);
-        },
-      );
+        setError("Join request was sent, but the server did not answer.");
+        setIsLoading(false);
+        setLoadingMessage("");
+        console.log("join-room no response", {
+          elapsedMs: Math.round(performance.now() - startedAt),
+          socketId: socket.id,
+        });
+      }, 8000);
     } catch (error) {
       setError(
         error instanceof Error ? error.message : "Could not connect to the game server.",
       );
       setIsLoading(false);
+      setLoadingMessage("");
+      clearPendingActionTimeout();
     }
   }
 
@@ -330,7 +287,7 @@ export default function Home() {
             disabled={isLoading}
             className="min-h-16 rounded-2xl bg-red-500 px-6 text-lg font-bold text-white shadow-lg shadow-red-950/40 transition hover:bg-red-400 disabled:cursor-not-allowed disabled:bg-zinc-700 active:scale-[0.98]"
           >
-            {isLoading ? "Connecting..." : "Create Room"}
+            {isLoading ? loadingMessage || "Connecting..." : "Create Room"}
           </button>
 
           <button
