@@ -45,7 +45,24 @@ const PLAYER_ICONS = [
   "👨‍🍳",
 ];
 
-const ROLE_OPTIONS = ["Detective", "Doctor", "Mafia", "Villager"];
+const ROLE_OPTIONS = [
+  "Detective",
+  "Doctor",
+  "Mafia",
+  "Villager",
+  "Vigilante",
+  "Cupid",
+  "Jester",
+  "Mafia Jester",
+];
+
+function isMafiaRole(role) {
+  return role === "Mafia" || role === "Mafia Jester";
+}
+
+function isDetectiveMafiaResult(role) {
+  return isMafiaRole(role) || role === "Jester";
+}
 
 function generateRoomCode() {
   const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -172,6 +189,10 @@ function formatRoom(roomCode, room, viewerId = "") {
     roleOptions: ROLE_OPTIONS,
     roomCode,
     players: Array.from(room.players.values()),
+    playerRoles:
+      viewerId === room.hostId
+        ? Object.fromEntries(room.roles.entries())
+        : {},
     selectedRoles: room.selectedRoles,
     voteTargets: canSeeVoteResults ? room.lastVoteTargets : [],
     voteCounts: canSeeVoteResults ? room.lastVoteCounts : {},
@@ -409,7 +430,7 @@ function checkWinCondition(room) {
   for (const player of getAliveGamePlayers(room)) {
     const role = room.roles.get(player.id);
 
-    if (role === "Mafia") {
+    if (isMafiaRole(role)) {
       aliveMafiaCount += 1;
     } else {
       aliveNonMafiaCount += 1;
@@ -1306,7 +1327,7 @@ app.prepare().then(() => {
         player.id,
         room.roles.get(player.id),
       ]);
-      const hasAliveMafia = aliveRoleEntries.some(([, role]) => role === "Mafia");
+      const hasAliveMafia = aliveRoleEntries.some(([, role]) => isMafiaRole(role));
       const hasAliveDoctor = aliveRoleEntries.some(([, role]) => role === "Doctor");
       const hasAliveDetective = aliveRoleEntries.some(
         ([, role]) => role === "Detective",
@@ -1380,10 +1401,11 @@ app.prepare().then(() => {
 
         if (detective) {
           const targetRole = room.roles.get(targetPlayer.id);
+          const detectedAsMafia = isDetectiveMafiaResult(targetRole);
 
           io.to(detective.id).emit("detective-result", {
-            detectedParty: targetRole === "Mafia" ? "Mafia" : "Villager",
-            isMafia: targetRole === "Mafia",
+            detectedParty: detectedAsMafia ? "Mafia" : "Villager",
+            isMafia: detectedAsMafia,
             targetName: targetPlayer.name,
           });
         }

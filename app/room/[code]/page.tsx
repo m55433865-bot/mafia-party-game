@@ -47,6 +47,7 @@ type RoomUpdate = {
   phase: string;
   playerColors: string[];
   playerIcons: string[];
+  playerRoles: Record<string, string>;
   readyPlayerIds: string[];
   revealVoteCounts: boolean;
   roleOptions: string[];
@@ -141,6 +142,48 @@ function getRoleCard(role: string): RoleCard {
     };
   }
 
+  if (role === "Vigilante") {
+    return {
+      artClassName: "from-orange-950 via-zinc-950 to-red-600",
+      imageLabel: "VG",
+      nightAbility:
+        "One bullet. Kill a suspect, but die of guilt if they are innocent.",
+      title: "Vigilante",
+      winCondition: "Eliminate all Mafia.",
+    };
+  }
+
+  if (role === "Cupid") {
+    return {
+      artClassName: "from-pink-950 via-zinc-950 to-rose-500",
+      imageLabel: "C",
+      nightAbility:
+        "One time: link two lovers. If one dies, the other dies too.",
+      title: "Cupid",
+      winCondition: "Eliminate all Mafia.",
+    };
+  }
+
+  if (role === "Jester") {
+    return {
+      artClassName: "from-purple-950 via-zinc-950 to-fuchsia-600",
+      imageLabel: "J",
+      nightAbility: "Passive: Detective sees you as Mafia.",
+      title: "Jester",
+      winCondition: "Get voted out.",
+    };
+  }
+
+  if (role === "Mafia Jester") {
+    return {
+      artClassName: "from-red-950 via-zinc-950 to-purple-700",
+      imageLabel: "MJ",
+      nightAbility: "Act with Mafia at night.",
+      title: "Mafia Jester",
+      winCondition: "Eliminate villagers.",
+    };
+  }
+
   return {
     artClassName: "from-amber-950 via-zinc-950 to-yellow-600",
     imageLabel: "V",
@@ -178,6 +221,7 @@ export default function RoomPage() {
   const [detectiveResult, setDetectiveResult] = useState("");
   const [playerColors, setPlayerColors] = useState<string[]>([]);
   const [playerIcons, setPlayerIcons] = useState<string[]>([]);
+  const [playerRoles, setPlayerRoles] = useState<Record<string, string>>({});
   const [readyPlayerIds, setReadyPlayerIds] = useState<string[]>([]);
   const [recentlyDeadIds, setRecentlyDeadIds] = useState<string[]>([]);
   const [revealVoteCounts, setRevealVoteCounts] = useState(false);
@@ -187,6 +231,10 @@ export default function RoomPage() {
     "Doctor",
     "Mafia",
     "Villager",
+    "Vigilante",
+    "Cupid",
+    "Jester",
+    "Mafia Jester",
   ]);
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
   const [voteTargets, setVoteTargets] = useState<VoteTarget[]>([]);
@@ -355,6 +403,7 @@ export default function RoomPage() {
       setPendingEliminationId(room.pendingEliminationId);
       setPlayerColors(room.playerColors);
       setPlayerIcons(room.playerIcons);
+      setPlayerRoles(room.playerRoles);
       setReadyPlayerIds(room.readyPlayerIds);
       setRevealVoteCounts(room.revealVoteCounts);
       setRoleOptions(room.roleOptions);
@@ -575,6 +624,10 @@ export default function RoomPage() {
   const canStartAutomatedGame =
     isCurrentHost && gameMode === "automated" && allGamePlayersReady;
   const currentPlayerReady = readyPlayerIds.includes(socketId);
+  const assignedRoleEntries = gamePlayers.map((player) => ({
+    player,
+    role: playerRoles[player.id] ?? "Unknown",
+  }));
   const isCurrentPlayerAlive = currentPlayer?.isHost
     ? true
     : (currentPlayer?.alive ?? true);
@@ -1137,6 +1190,29 @@ export default function RoomPage() {
                   {roleCard.winCondition}
                 </p>
               </div>
+            </div>
+          </div>
+        ) : null}
+
+        {gameStarted && isCurrentHost ? (
+          <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
+            <h2 className="text-xl font-bold">Moderator Role View</h2>
+            <div className="mt-4 flex flex-col gap-3">
+              {assignedRoleEntries.map(({ player, role: assignedRole }) => {
+                const assignedRoleCard = getRoleCard(assignedRole);
+
+                return (
+                  <div
+                    key={player.id}
+                    className="flex items-center justify-between gap-3 rounded-xl bg-zinc-950 px-4 py-3"
+                  >
+                    {renderPlayerName(player)}
+                    <span className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-sm font-bold text-yellow-100">
+                      {assignedRoleCard.title}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         ) : null}
