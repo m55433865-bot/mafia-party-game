@@ -153,6 +153,7 @@ export default function RoomPage() {
   const [voteSubmitted, setVoteSubmitted] = useState(false);
   const [winner, setWinner] = useState("");
   const [isReconnecting, setIsReconnecting] = useState(false);
+  const [isRoomCodeCopied, setIsRoomCodeCopied] = useState(false);
   const stablePlayerId = useMemo(() => getStablePlayerId(), []);
 
   const fallbackSession = JSON.stringify({
@@ -851,6 +852,18 @@ export default function RoomPage() {
     );
   }
 
+  async function handleCopyRoomCode() {
+    setError("");
+
+    try {
+      await navigator.clipboard.writeText(session.roomCode);
+      setIsRoomCodeCopied(true);
+      window.setTimeout(() => setIsRoomCodeCopied(false), 1400);
+    } catch {
+      setError("Could not copy the room code.");
+    }
+  }
+
   function getPlayer(playerId: string) {
     return currentPlayers.find((player) => player.id === playerId);
   }
@@ -917,9 +930,18 @@ export default function RoomPage() {
           Room Code
         </p>
 
-        <h1 className="mt-4 text-6xl font-bold tracking-wider">
-          {session.roomCode}
-        </h1>
+        <button
+          onClick={handleCopyRoomCode}
+          className="mt-4 w-full rounded-2xl border border-zinc-800 bg-zinc-900 px-5 py-4 transition hover:border-red-400 active:scale-[0.98]"
+          type="button"
+        >
+          <span className="block text-6xl font-bold tracking-wider">
+            {session.roomCode}
+          </span>
+          <span className="mt-2 block text-sm font-bold text-zinc-400">
+            {isRoomCodeCopied ? "Copied" : "Tap to copy"}
+          </span>
+        </button>
 
         {isReconnecting ? (
           <p className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm font-bold text-amber-100">
