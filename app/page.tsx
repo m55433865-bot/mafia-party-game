@@ -228,6 +228,14 @@ export default function Home() {
             {isLoading ? "Connecting..." : "Create Room"}
           </button>
 
+          <button
+            onClick={() => router.push("/roles")}
+            className="min-h-14 rounded-2xl border border-zinc-700 bg-zinc-900 px-6 text-base font-bold text-zinc-100 transition hover:border-zinc-500 hover:bg-zinc-800 active:scale-[0.98]"
+            type="button"
+          >
+            View Roles
+          </button>
+
           <div className="my-2 h-px bg-zinc-800" />
 
           <label className="text-left text-sm font-medium text-zinc-300">
