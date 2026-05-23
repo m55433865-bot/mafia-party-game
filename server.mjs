@@ -128,6 +128,83 @@ function getRandomAvailableIcon(room) {
   return availableIcons[Math.floor(Math.random() * availableIcons.length)];
 }
 
+function createEmptyRoom(hostId) {
+  return {
+    confirmationResponses: new Set(),
+    confirmationChangedVoters: new Set(),
+    cupidLoverIds: [],
+    defenseEndsAt: 0,
+    gameOver: false,
+    gameStarted: false,
+    hostId,
+    lastEliminatedPlayerId: "",
+    lastVoteCounts: {},
+    lastVoteTargets: [],
+    nightActions: {
+      detectiveTargetId: "",
+      doctorTargetId: "",
+      mafiaTargetId: "",
+    },
+    nightResultMessage: "",
+    nightStep: "",
+    pendingEliminationId: "",
+    phase: "lobby",
+    players: new Map(),
+    readyPlayerIds: new Set(),
+    revealVoteCounts: false,
+    roles: new Map(),
+    selectedRoles: [],
+    votes: new Map(),
+    winner: "",
+  };
+}
+
+function addHostToNewRoom(room, { avatarUrl, playerId, playerName, socketId = "" }) {
+  const player = {
+    alive: false,
+    avatarUrl,
+    color: getRandomAvailableColor(room),
+    connected: Boolean(socketId),
+    disconnectedAt: socketId ? 0 : Date.now(),
+    icon: avatarUrl ? "" : getRandomAvailableIcon(room),
+    id: playerId,
+    name: playerName,
+    isHost: true,
+    reconnectTimeout: null,
+    socketId,
+  };
+
+  if (!player.color || (!player.avatarUrl && !player.icon)) {
+    return { error: "Room is full." };
+  }
+
+  room.players.set(playerId, player);
+  return { player };
+}
+
+function addPlayerToRoom(room, { avatarUrl, playerId, playerName, socketId = "" }) {
+  const player = {
+    alive: true,
+    avatarUrl,
+    color: getRandomAvailableColor(room),
+    connected: Boolean(socketId),
+    disconnectedAt: socketId ? 0 : Date.now(),
+    icon: avatarUrl ? "" : getRandomAvailableIcon(room),
+    id: playerId,
+    name: playerName,
+    isHost: room.hostId === playerId,
+    reconnectTimeout: null,
+    socketId,
+  };
+
+  if (!player.color || (!player.avatarUrl && !player.icon)) {
+    return { error: "Room is full." };
+  }
+
+  room.players.set(playerId, player);
+  return { player };
+}
+
 function getGamePlayers(room) {
   return Array.from(room.players.values()).filter((player) => !player.isHost);
 }
@@ -662,13 +739,172 @@ function markPlayerDisconnectedFromAllRooms(io, socket, rooms, reason) {
   }
 }
 
-app.prepare().then(() => {
-  const httpServer = createServer(handle);
-  const io = new Server(httpServer);
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
 
+    req.on("data", (chunk) => {
+      body += chunk;
+
+      if (body.length > 100000) {
+        req.destroy();
+        reject(new Error("Request body is too large."));
+      }
+    });
+
+    req.on("end", () => {
+      if (!body) {
+        resolve({});
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        reject(new Error("Invalid JSON body."));
+      }
+    });
+
+    req.on("error", reject);
+  });
+}
+
+function sendJson(res, statusCode, payload) {
+  res.writeHead(statusCode, {
+    "content-type": "application/json",
+  });
+  res.end(JSON.stringify(payload));
+}
+
+app.prepare().then(() => {
   // Socket.io room state lives in memory only for now.
   // Restarting the server clears every room and player.
   const rooms = new Map();
+  let io;
+  const httpServer = createServer(async (req, res) => {
+    const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host}`);
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/create-room") {
+      try {
+        const startedAt = Date.now();
+        const body = await readJsonBody(req);
+        const cleanAvatarUrl = String(body.avatarUrl ?? "").trim();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const cleanPlayerName = String(body.playerName ?? "").trim();
+
+        if (!cleanPlayerId || !cleanPlayerName) {
+          sendJson(res, 400, { ok: false, error: "Enter your name first." });
+          return;
+        }
+
+        const roomCode = createUniqueRoomCode(rooms);
+        const room = createEmptyRoom(cleanPlayerId);
+        const { error } = addHostToNewRoom(room, {
+          avatarUrl: cleanAvatarUrl,
+          playerId: cleanPlayerId,
+          playerName: cleanPlayerName,
+        });
+
+        if (error) {
+          sendJson(res, 400, { ok: false, error });
+          return;
+        }
+
+        rooms.set(roomCode, room);
+        console.log("room created via http", {
+          elapsedMs: Date.now() - startedAt,
+          hostId: cleanPlayerId,
+          roomCode,
+        });
+        sendJson(res, 200, { isHost: true, ok: true, roomCode });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not create room.",
+        });
+      }
+
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/join-room") {
+      try {
+        const startedAt = Date.now();
+        const body = await readJsonBody(req);
+        const cleanAvatarUrl = String(body.avatarUrl ?? "").trim();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const cleanPlayerName = String(body.playerName ?? "").trim();
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const room = rooms.get(cleanRoomCode);
+
+        if (!cleanPlayerId || !cleanPlayerName || !cleanRoomCode) {
+          sendJson(res, 400, {
+            ok: false,
+            error: "Enter your name and room code.",
+          });
+          return;
+        }
+
+        if (!room) {
+          sendJson(res, 404, { ok: false, error: "Room does not exist." });
+          return;
+        }
+
+        const existingPlayer = room.players.get(cleanPlayerId);
+
+        if (existingPlayer) {
+          existingPlayer.avatarUrl = cleanAvatarUrl || existingPlayer.avatarUrl;
+          existingPlayer.name = cleanPlayerName || existingPlayer.name;
+          sendJson(res, 200, {
+            isHost: existingPlayer.isHost,
+            ok: true,
+            restored: true,
+            roomCode: cleanRoomCode,
+          });
+          return;
+        }
+
+        if (room.gameStarted) {
+          sendJson(res, 409, { ok: false, error: "Game already started." });
+          return;
+        }
+
+        const { error, player } = addPlayerToRoom(room, {
+          avatarUrl: cleanAvatarUrl,
+          playerId: cleanPlayerId,
+          playerName: cleanPlayerName,
+        });
+
+        if (error || !player) {
+          sendJson(res, 400, { ok: false, error: error ?? "Room is full." });
+          return;
+        }
+
+        console.log("player joined via http", {
+          elapsedMs: Date.now() - startedAt,
+          playerId: cleanPlayerId,
+          roomCode: cleanRoomCode,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          isHost: player.isHost,
+          ok: true,
+          restored: false,
+          roomCode: cleanRoomCode,
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not join room.",
+        });
+      }
+
+      return;
+    }
+
+    handle(req, res);
+  });
+  io = new Server(httpServer);
 
   io.on("connection", (socket) => {
     const authPlayerId = String(socket.handshake.auth?.playerId ?? "").trim();

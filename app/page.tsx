@@ -44,6 +44,55 @@ export default function Home() {
     }
   }
 
+  function enterRoom({
+    avatarUrl,
+    isHost,
+    playerName,
+    roomCode: nextRoomCode,
+  }: {
+    avatarUrl: string;
+    isHost: boolean;
+    playerName: string;
+    roomCode: string;
+  }) {
+    if (!nextRoomCode) {
+      throw new Error("The server did not return a room code.");
+    }
+
+    clearPendingActionTimeout();
+    sessionStorage.setItem("playerName", playerName);
+    sessionStorage.setItem("roomCode", nextRoomCode);
+    sessionStorage.setItem("isHost", String(isHost));
+    sessionStorage.setItem("avatarUrl", avatarUrl);
+    setLoadingMessage("Opening room...");
+    router.push(`/room/${nextRoomCode}`);
+  }
+
+  async function postRoomAction(
+    path: string,
+    payload: Record<string, string>,
+  ) {
+    const response = await fetch(path, {
+      body: JSON.stringify(payload),
+      headers: {
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+    const result = (await response.json()) as {
+      error?: string;
+      isHost?: boolean;
+      ok: boolean;
+      roomCode?: string;
+    };
+
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error ?? "Room request failed.");
+    }
+
+    return result;
+  }
+
   useEffect(() => {
     let isMounted = true;
 
@@ -146,29 +195,52 @@ export default function Home() {
 
     try {
       const startedAt = performance.now();
-      await resetAndConnect();
-      socket.emit("create-room", {
+      const payload = {
         avatarUrl: profile?.avatar_url ?? "",
         playerId: getStablePlayerId(),
         playerName,
-      });
-      clearPendingActionTimeout();
-      pendingActionTimeoutRef.current = window.setTimeout(() => {
-        if (!socket.connected) {
-          return;
-        }
+      };
 
-        setError("Room create request was sent, but the server did not answer.");
-        setIsLoading(false);
-        setLoadingMessage("");
-        console.log("create-room no response", {
-          elapsedMs: Math.round(performance.now() - startedAt),
-          socketId: socket.id,
+      try {
+        await resetAndConnect();
+        socket.emit("create-room", payload);
+        clearPendingActionTimeout();
+        pendingActionTimeoutRef.current = window.setTimeout(async () => {
+          try {
+            setLoadingMessage("Creating room...");
+            const response = await postRoomAction("/api/create-room", payload);
+            enterRoom({
+              avatarUrl: payload.avatarUrl,
+              isHost: response.isHost ?? true,
+              playerName,
+              roomCode: response.roomCode ?? "",
+            });
+          } catch (error) {
+            setError(
+              error instanceof Error ? error.message : "Could not create the room.",
+            );
+            setIsLoading(false);
+            setLoadingMessage("");
+          }
+        }, 2500);
+      } catch {
+        setLoadingMessage("Creating room...");
+        const response = await postRoomAction("/api/create-room", payload);
+        enterRoom({
+          avatarUrl: payload.avatarUrl,
+          isHost: response.isHost ?? true,
+          playerName,
+          roomCode: response.roomCode ?? "",
         });
-      }, 8000);
+      }
+
+      console.log("create-room requested", {
+        elapsedMs: Math.round(performance.now() - startedAt),
+        socketConnected: socket.connected,
+      });
     } catch (error) {
       setError(
-        error instanceof Error ? error.message : "Could not connect to the game server.",
+        error instanceof Error ? error.message : "Could not create the room.",
       );
       setIsLoading(false);
       setLoadingMessage("");
@@ -192,31 +264,54 @@ export default function Home() {
 
     try {
       const startedAt = performance.now();
-      await resetAndConnect();
       setLoadingMessage("Joining room...");
-      socket.emit("join-room", {
+      const payload = {
         avatarUrl: profile?.avatar_url ?? "",
         playerId: getStablePlayerId(),
         playerName,
         roomCode: nextRoomCode,
-      });
-      clearPendingActionTimeout();
-      pendingActionTimeoutRef.current = window.setTimeout(() => {
-        if (!socket.connected) {
-          return;
-        }
+      };
 
-        setError("Join request was sent, but the server did not answer.");
-        setIsLoading(false);
-        setLoadingMessage("");
-        console.log("join-room no response", {
-          elapsedMs: Math.round(performance.now() - startedAt),
-          socketId: socket.id,
+      try {
+        await resetAndConnect();
+        setLoadingMessage("Joining room...");
+        socket.emit("join-room", payload);
+        clearPendingActionTimeout();
+        pendingActionTimeoutRef.current = window.setTimeout(async () => {
+          try {
+            setLoadingMessage("Joining room...");
+            const response = await postRoomAction("/api/join-room", payload);
+            enterRoom({
+              avatarUrl: payload.avatarUrl,
+              isHost: response.isHost ?? false,
+              playerName,
+              roomCode: response.roomCode ?? nextRoomCode,
+            });
+          } catch (error) {
+            setError(
+              error instanceof Error ? error.message : "Could not join the room.",
+            );
+            setIsLoading(false);
+            setLoadingMessage("");
+          }
+        }, 2500);
+      } catch {
+        const response = await postRoomAction("/api/join-room", payload);
+        enterRoom({
+          avatarUrl: payload.avatarUrl,
+          isHost: response.isHost ?? false,
+          playerName,
+          roomCode: response.roomCode ?? nextRoomCode,
         });
-      }, 8000);
+      }
+
+      console.log("join-room requested", {
+        elapsedMs: Math.round(performance.now() - startedAt),
+        socketConnected: socket.connected,
+      });
     } catch (error) {
       setError(
-        error instanceof Error ? error.message : "Could not connect to the game server.",
+        error instanceof Error ? error.message : "Could not join the room.",
       );
       setIsLoading(false);
       setLoadingMessage("");
