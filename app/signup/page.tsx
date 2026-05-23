@@ -42,17 +42,15 @@ export default function SignupPage() {
     setIsLoading(true);
 
     const normalizedEmail = email.trim().toLowerCase();
-    const { error: otpError } = await supabase.auth.signInWithOtp({
+    const { error: signupError } = await supabase.auth.signUp({
       email: normalizedEmail,
-      options: {
-        shouldCreateUser: true,
-      },
+      password,
     });
 
-    console.log("OTP sent with type: email");
+    console.log("OTP sent with type: signup");
 
-    if (otpError) {
-      setError(otpError.message);
+    if (signupError) {
+      setError(signupError.message);
       setIsLoading(false);
       return;
     }
@@ -73,25 +71,17 @@ export default function SignupPage() {
     const normalizedEmail = pendingEmail.trim().toLowerCase();
     const normalizedToken = otpCode.replace(/\s/g, "").trim();
 
-    console.log("OTP verifying with type: email");
+    console.log("OTP verifying with type: signup");
 
     const { data, error: verifyError } = await supabase.auth.verifyOtp({
       email: normalizedEmail,
       token: normalizedToken,
-      type: "email",
+      type: "signup",
     });
 
     if (verifyError || !data.user) {
       console.error("Supabase verifyOtp error:", verifyError);
       setError(verifyError?.message ?? "That code did not work.");
-      setIsLoading(false);
-      return;
-    }
-
-    const { error: passwordError } = await supabase.auth.updateUser({ password });
-
-    if (passwordError) {
-      setError(passwordError.message);
       setIsLoading(false);
       return;
     }
@@ -114,14 +104,12 @@ export default function SignupPage() {
     setSuccessMessage("");
     setIsLoading(true);
 
-    const { error: resendError } = await supabase.auth.signInWithOtp({
+    const { error: resendError } = await supabase.auth.resend({
       email: pendingEmail,
-      options: {
-        shouldCreateUser: true,
-      },
+      type: "signup",
     });
 
-    console.log("OTP sent with type: email");
+    console.log("OTP sent with type: signup");
 
     if (resendError) {
       setError(resendError.message);
