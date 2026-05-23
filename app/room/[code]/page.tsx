@@ -106,6 +106,8 @@ export default function RoomPage() {
   const socketRef = useRef(socket);
   const previousAliveRef = useRef<Record<string, boolean> | null>(null);
   const restoreStartedAtRef = useRef(0);
+  const localRoleDeckDirtyRef = useRef(false);
+  const selectedRolesRef = useRef<string[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
   const [allAlivePlayersVoted, setAllAlivePlayersVoted] = useState(false);
   const [authPlayerName, setAuthPlayerName] = useState("");
@@ -206,6 +208,10 @@ export default function RoomPage() {
     },
     [authAvatarUrl, authPlayerName, sessionSnapshot],
   );
+
+  useEffect(() => {
+    selectedRolesRef.current = selectedRoles;
+  }, [selectedRoles]);
 
   useEffect(() => {
     let isMounted = true;
@@ -321,7 +327,17 @@ export default function RoomPage() {
       setReadyPlayerIds(room.readyPlayerIds);
       setRevealVoteCounts(room.revealVoteCounts);
       setRoleOptions(room.roleOptions);
-      setSelectedRoles(room.selectedRoles);
+      if (!currentPlayer?.isHost || room.gameStarted) {
+        localRoleDeckDirtyRef.current = false;
+        setSelectedRoles(room.selectedRoles);
+      } else if (
+        localRoleDeckDirtyRef.current &&
+        room.selectedRoles.join("|") === selectedRolesRef.current.join("|")
+      ) {
+        localRoleDeckDirtyRef.current = false;
+      } else if (!localRoleDeckDirtyRef.current) {
+        setSelectedRoles(room.selectedRoles);
+      }
       setVoteTargets(room.voteTargets);
       setVoteCounts(room.voteCounts);
       setVotingStatus(room.votingStatus);
@@ -398,6 +414,13 @@ export default function RoomPage() {
         restoreRequestedAt: Date.now(),
         roomCode: session.roomCode,
       });
+
+      if (localRoleDeckDirtyRef.current && session.isHost) {
+        currentSocket.emit("set-selected-roles", {
+          roles: selectedRolesRef.current,
+          roomCode: session.roomCode,
+        });
+      }
     }
 
     function connectNow(trigger: string) {
@@ -581,7 +604,14 @@ export default function RoomPage() {
       window.removeEventListener("pageshow", handlePageShow);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [isAuthLoading, session.avatarUrl, session.playerName, session.roomCode, stablePlayerId]);
+  }, [
+    isAuthLoading,
+    session.avatarUrl,
+    session.isHost,
+    session.playerName,
+    session.roomCode,
+    stablePlayerId,
+  ]);
 
   useEffect(() => {
     if (!defenseEndsAt) {
@@ -718,6 +748,7 @@ export default function RoomPage() {
       socketRef.current.connect();
       socketRef.current.once("connect", () => {
         socketRef.current.emit("start-game", {
+          selectedRoles,
           roomCode: session.roomCode,
         });
       });
@@ -725,23 +756,44 @@ export default function RoomPage() {
     }
 
     socketRef.current.emit("start-game", {
+      selectedRoles,
       roomCode: session.roomCode,
     });
   }
 
   function handleAddSelectedRole(nextRole: string) {
     setError("");
-    socketRef.current.emit("add-selected-role", {
-      role: nextRole,
-      roomCode: session.roomCode,
+    localRoleDeckDirtyRef.current = true;
+    setSelectedRoles((currentRoles) => {
+      const nextRoles = [...currentRoles, nextRole];
+      selectedRolesRef.current = nextRoles;
+
+      if (socketRef.current.connected) {
+        socketRef.current.emit("set-selected-roles", {
+          roles: nextRoles,
+          roomCode: session.roomCode,
+        });
+      }
+
+      return nextRoles;
     });
   }
 
   function handleRemoveSelectedRole(roleIndex: number) {
     setError("");
-    socketRef.current.emit("remove-selected-role", {
-      roleIndex,
-      roomCode: session.roomCode,
+    localRoleDeckDirtyRef.current = true;
+    setSelectedRoles((currentRoles) => {
+      const nextRoles = currentRoles.filter((_, index) => index !== roleIndex);
+      selectedRolesRef.current = nextRoles;
+
+      if (socketRef.current.connected) {
+        socketRef.current.emit("set-selected-roles", {
+          roles: nextRoles,
+          roomCode: session.roomCode,
+        });
+      }
+
+      return nextRoles;
     });
   }
 

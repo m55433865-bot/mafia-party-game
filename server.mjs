@@ -416,6 +416,16 @@ function assignSelectedRoles(players, selectedRoles) {
   return roles;
 }
 
+function cleanSelectedRoles(roles) {
+  if (!Array.isArray(roles)) {
+    return [];
+  }
+
+  return roles
+    .map((role) => String(role ?? "").trim())
+    .filter((role) => ROLE_OPTIONS.includes(role));
+}
+
 function emitGameStarted(io, roomCode, room) {
   const publicPlayers = formatRoom(roomCode, room).players;
 
@@ -1254,6 +1264,30 @@ app.prepare().then(() => {
       emitRoomUpdated(io, cleanRoomCode, room);
     });
 
+    socket.on("set-selected-roles", ({ roomCode, roles }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const cleanRoles = cleanSelectedRoles(roles);
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room) {
+        socket.emit("error-message", "Room does not exist.");
+        return;
+      }
+
+      if (room.hostId !== getSocketPlayerId(socket)) {
+        socket.emit("error-message", "Only the moderator can edit roles.");
+        return;
+      }
+
+      if (room.gameStarted) {
+        socket.emit("error-message", "Roles can only be changed in lobby.");
+        return;
+      }
+
+      room.selectedRoles = cleanRoles;
+      emitRoomUpdated(io, cleanRoomCode, room);
+    });
+
     socket.on("toggle-ready", ({ roomCode }) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
@@ -1355,8 +1389,9 @@ app.prepare().then(() => {
       emitRoomUpdated(io, cleanRoomCode, room);
     });
 
-    socket.on("start-game", ({ roomCode }) => {
+    socket.on("start-game", ({ roomCode, selectedRoles }) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const incomingSelectedRoles = cleanSelectedRoles(selectedRoles);
       const room = rooms.get(cleanRoomCode);
 
       console.log("server received start-game", {
@@ -1376,6 +1411,10 @@ app.prepare().then(() => {
       }
 
       const gamePlayers = getGamePlayers(room);
+      if (incomingSelectedRoles.length > 0) {
+        room.selectedRoles = incomingSelectedRoles;
+      }
+
       const allPlayersReady =
         gamePlayers.length > 0 &&
         gamePlayers.every((player) => room.readyPlayerIds.has(player.id));
