@@ -8,6 +8,7 @@ import { supabase } from "../lib/supabase";
 
 export default function LoginPage() {
   const router = useRouter();
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "Missing Supabase URL";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -106,6 +107,10 @@ export default function LoginPage() {
           <Link className="font-bold text-emerald-200" href="/signup">
             Sign up
           </Link>
+        </p>
+
+        <p className="mt-4 break-all rounded-xl border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-xs text-zinc-500">
+          Supabase URL: {supabaseUrl}
         </p>
       </section>
     </main>
