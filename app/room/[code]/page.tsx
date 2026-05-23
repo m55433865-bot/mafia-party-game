@@ -84,6 +84,7 @@ type VoteTarget = {
 type RoleCard = {
   artClassName: string;
   imageLabel: string;
+  imageSrc: string;
   nightAbility: string;
   title: string;
   winCondition: string;
@@ -116,6 +117,7 @@ function getRoleCard(role: string): RoleCard {
     return {
       artClassName: "from-red-950 via-zinc-950 to-red-700",
       imageLabel: "M",
+      imageSrc: "/roles/mafia.png",
       nightAbility: "Choose one player to attack.",
       title: "Mafia",
       winCondition: "Equal or outnumber the villagers.",
@@ -126,6 +128,7 @@ function getRoleCard(role: string): RoleCard {
     return {
       artClassName: "from-emerald-950 via-zinc-950 to-emerald-600",
       imageLabel: "D",
+      imageSrc: "/roles/doctor.png",
       nightAbility: "Choose one player to protect.",
       title: "Doctor",
       winCondition: "Eliminate all Mafia.",
@@ -136,6 +139,7 @@ function getRoleCard(role: string): RoleCard {
     return {
       artClassName: "from-sky-950 via-zinc-950 to-blue-600",
       imageLabel: "I",
+      imageSrc: "/roles/detective.png",
       nightAbility: "Check one player's party.",
       title: "Detective",
       winCondition: "Eliminate all Mafia.",
@@ -146,6 +150,7 @@ function getRoleCard(role: string): RoleCard {
     return {
       artClassName: "from-orange-950 via-zinc-950 to-red-600",
       imageLabel: "VG",
+      imageSrc: "/roles/vigilante.png",
       nightAbility:
         "One bullet. Kill a suspect, but die of guilt if they are innocent.",
       title: "Vigilante",
@@ -157,6 +162,7 @@ function getRoleCard(role: string): RoleCard {
     return {
       artClassName: "from-pink-950 via-zinc-950 to-rose-500",
       imageLabel: "C",
+      imageSrc: "/roles/cupid.png",
       nightAbility:
         "One time: link two lovers. If one dies, the other dies too.",
       title: "Cupid",
@@ -168,6 +174,7 @@ function getRoleCard(role: string): RoleCard {
     return {
       artClassName: "from-purple-950 via-zinc-950 to-fuchsia-600",
       imageLabel: "J",
+      imageSrc: "/roles/jester.png",
       nightAbility: "Passive: Detective sees you as Mafia.",
       title: "Jester",
       winCondition: "Get voted out.",
@@ -178,6 +185,7 @@ function getRoleCard(role: string): RoleCard {
     return {
       artClassName: "from-red-950 via-zinc-950 to-purple-700",
       imageLabel: "MJ",
+      imageSrc: "/roles/mafia-jester.png",
       nightAbility: "Act with Mafia at night.",
       title: "Mafia Jester",
       winCondition: "Eliminate villagers.",
@@ -187,6 +195,7 @@ function getRoleCard(role: string): RoleCard {
   return {
     artClassName: "from-amber-950 via-zinc-950 to-yellow-600",
     imageLabel: "V",
+    imageSrc: "/roles/villager.png",
     nightAbility: "No night ability.",
     title: "Villager",
     winCondition: "Eliminate all Mafia.",
@@ -1133,11 +1142,14 @@ export default function RoomPage() {
                                 type="button"
                               >
                                 <div
-                                  className={`flex aspect-[4/3] items-center justify-center bg-gradient-to-br ${selectedRoleCard.artClassName}`}
+                                  className={`aspect-[4/3] overflow-hidden bg-gradient-to-br ${selectedRoleCard.artClassName}`}
                                 >
-                                  <span className="flex h-12 w-12 items-center justify-center rounded-full border border-yellow-200/40 bg-black/30 text-2xl font-black text-yellow-100">
-                                    {selectedRoleCard.imageLabel}
-                                  </span>
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    alt=""
+                                    className="h-full w-full object-cover"
+                                    src={selectedRoleCard.imageSrc}
+                                  />
                                 </div>
                                 <p className="px-3 py-2 text-sm font-bold">
                                   {selectedRoleCard.title}
@@ -1169,11 +1181,14 @@ export default function RoomPage() {
               </div>
 
               <div
-                className={`mt-3 flex aspect-[4/3] items-center justify-center rounded-lg border border-yellow-500/30 bg-gradient-to-br ${roleCard.artClassName}`}
+                className={`mt-3 aspect-[4/3] overflow-hidden rounded-lg border border-yellow-500/30 bg-gradient-to-br ${roleCard.artClassName}`}
               >
-                <div className="flex h-28 w-28 items-center justify-center rounded-full border border-yellow-200/40 bg-black/30 text-6xl font-black text-yellow-100 shadow-xl">
-                  {roleCard.imageLabel}
-                </div>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  alt=""
+                  className="h-full w-full object-cover"
+                  src={roleCard.imageSrc}
+                />
               </div>
 
               <div className="mt-3 rounded-lg border border-yellow-500/30 bg-yellow-50 px-3 py-3 text-left text-zinc-950">
