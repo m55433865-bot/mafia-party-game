@@ -1093,17 +1093,17 @@ export default function RoomPage() {
                 />
               </div>
 
-              <div className="mt-3 rounded-lg border border-yellow-500/30 bg-yellow-50 px-3 py-3 text-left text-zinc-950">
-                <p className="text-sm font-black uppercase tracking-[0.12em]">
+              <div className="mt-3 rounded-lg border border-yellow-500/30 bg-zinc-950 px-3 py-3 text-left text-yellow-50 shadow-inner shadow-black/60">
+                <p className="text-sm font-black uppercase tracking-[0.12em] text-yellow-200">
                   Night ability
                 </p>
-                <p className="mt-1 text-sm font-bold leading-6">
+                <p className="mt-1 text-sm font-bold leading-6 text-zinc-100">
                   {roleCard.nightAbility}
                 </p>
-                <p className="mt-3 text-sm font-black uppercase tracking-[0.12em]">
+                <p className="mt-3 text-sm font-black uppercase tracking-[0.12em] text-yellow-200">
                   Win condition
                 </p>
-                <p className="mt-1 text-sm font-bold leading-6">
+                <p className="mt-1 text-sm font-bold leading-6 text-zinc-100">
                   {roleCard.winCondition}
                 </p>
               </div>
