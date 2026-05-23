@@ -33,12 +33,17 @@ export const socket = io(socketUrl, {
   auth: () => ({
     playerId: getStablePlayerId(),
   }),
+  closeOnBeforeunload: false,
+  forceNew: false,
+  multiplex: true,
+  rememberUpgrade: true,
   reconnection: true,
   reconnectionAttempts: Infinity,
-  reconnectionDelay: 500,
-  reconnectionDelayMax: 8000,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
   randomizationFactor: 0.5,
-  transports: ["polling", "websocket"],
+  timeout: 10000,
+  transports: ["websocket", "polling"],
   tryAllTransports: true,
   upgrade: true,
 });
@@ -67,6 +72,7 @@ if (typeof window !== "undefined") {
   socket.on("connect_error", (error) => {
     console.log("Socket.io connect_error", {
       message: error.message,
+      playerId: getStablePlayerId(),
       url: socketUrl,
     });
   });
@@ -88,8 +94,18 @@ if (typeof window !== "undefined") {
     });
   });
 
+  socket.io.on("reconnect_error", (error) => {
+    console.log("Socket.io reconnect failure", {
+      message: error.message,
+      playerId: getStablePlayerId(),
+      url: socketUrl,
+    });
+  });
+
   socket.on("disconnect", (reason) => {
     console.log("Socket.io disconnected", {
+      id: socket.id,
+      playerId: getStablePlayerId(),
       reason,
       url: socketUrl,
     });

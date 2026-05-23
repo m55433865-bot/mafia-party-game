@@ -754,10 +754,18 @@ app.prepare().then(() => {
     });
 
     // Players can join only rooms already created in server memory.
-    socket.on("join-room", ({ avatarUrl, playerId, playerName, roomCode }) => {
+    socket.on("join-room", ({
+      avatarUrl,
+      playerId,
+      playerName,
+      restoreRequestedAt,
+      roomCode,
+    }) => {
+      const restoreStartedAt = Date.now();
       const cleanAvatarUrl = String(avatarUrl ?? "").trim();
       const cleanPlayerId = String(playerId ?? "").trim() || socket.id;
       const cleanPlayerName = String(playerName ?? "").trim();
+      const cleanRestoreRequestedAt = Number(restoreRequestedAt) || 0;
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
 
@@ -789,6 +797,10 @@ app.prepare().then(() => {
         socket.join(cleanRoomCode);
 
         console.log("session restore success", {
+          elapsedMs: Date.now() - restoreStartedAt,
+          networkElapsedMs: cleanRestoreRequestedAt
+            ? Date.now() - cleanRestoreRequestedAt
+            : undefined,
           roomCode: cleanRoomCode,
           playerId: cleanPlayerId,
           playerName: existingPlayer.name,
@@ -835,6 +847,10 @@ app.prepare().then(() => {
       socket.join(cleanRoomCode);
 
       console.log("player joined", {
+        elapsedMs: Date.now() - restoreStartedAt,
+        networkElapsedMs: cleanRestoreRequestedAt
+          ? Date.now() - cleanRestoreRequestedAt
+          : undefined,
         roomCode: cleanRoomCode,
         playerId: cleanPlayerId,
         playerName: cleanPlayerName,

@@ -105,6 +105,7 @@ export default function RoomPage() {
   const router = useRouter();
   const socketRef = useRef(socket);
   const previousAliveRef = useRef<Record<string, boolean> | null>(null);
+  const restoreStartedAtRef = useRef(0);
   const [players, setPlayers] = useState<Player[]>([]);
   const [allAlivePlayersVoted, setAllAlivePlayersVoted] = useState(false);
   const [authPlayerName, setAuthPlayerName] = useState("");
@@ -261,6 +262,7 @@ export default function RoomPage() {
 
     const roomPath = `/room/${session.roomCode}`;
     const currentSocket = socketRef.current;
+    isManualLeaveInProgress = false;
 
     if (pendingLeaveTimeout) {
       window.clearTimeout(pendingLeaveTimeout);
@@ -380,19 +382,48 @@ export default function RoomPage() {
       setError("");
     }
 
-    function handleConnect() {
-      setSocketId(stablePlayerId);
-      setIsReconnecting(false);
+    function emitRoomRestore(trigger: string) {
+      restoreStartedAtRef.current = performance.now();
+      console.log("client room restore requested", {
+        connected: currentSocket.connected,
+        playerId: stablePlayerId,
+        roomCode: session.roomCode,
+        trigger,
+      });
+
       currentSocket.emit("join-room", {
         avatarUrl: session.avatarUrl,
         playerId: stablePlayerId,
         playerName: session.playerName,
+        restoreRequestedAt: Date.now(),
         roomCode: session.roomCode,
       });
     }
 
+    function connectNow(trigger: string) {
+      if (currentSocket.connected) {
+        emitRoomRestore(trigger);
+        return;
+      }
+
+      console.log("socket connect requested", {
+        active: currentSocket.active,
+        playerId: stablePlayerId,
+        roomCode: session.roomCode,
+        trigger,
+      });
+      currentSocket.connect();
+    }
+
+    function handleConnect() {
+      setSocketId(stablePlayerId);
+      setIsReconnecting(false);
+      emitRoomRestore("connect");
+    }
+
     function handleDisconnect(reason: string) {
-      console.log("client reconnecting after disconnect", {
+      console.log("client socket disconnected", {
+        connected: currentSocket.connected,
         playerId: stablePlayerId,
         reason,
         roomCode: session.roomCode,
@@ -409,6 +440,33 @@ export default function RoomPage() {
       setIsReconnecting(true);
     }
 
+    function handleReconnectSuccess(attempt: number) {
+      console.log("client reconnect success", {
+        attempt,
+        playerId: stablePlayerId,
+        roomCode: session.roomCode,
+      });
+      setIsReconnecting(false);
+    }
+
+    function handleReconnectFailure(error: Error) {
+      console.log("client reconnect failure", {
+        message: error.message,
+        playerId: stablePlayerId,
+        roomCode: session.roomCode,
+      });
+      setIsReconnecting(true);
+    }
+
+    function handleConnectError(error: Error) {
+      console.log("client connect error", {
+        message: error.message,
+        playerId: stablePlayerId,
+        roomCode: session.roomCode,
+      });
+      setIsReconnecting(true);
+    }
+
     function handleSessionRestored(restoredSession: {
       phase: string;
       playerId: string;
@@ -419,11 +477,28 @@ export default function RoomPage() {
         return;
       }
 
-      console.log("client session restore", restoredSession);
+      console.log("client session restore", {
+        ...restoredSession,
+        elapsedMs: Math.round(performance.now() - restoreStartedAtRef.current),
+      });
       setSocketId(restoredSession.playerId);
       setRole(restoredSession.role);
       setPhase(restoredSession.phase);
       setIsReconnecting(false);
+    }
+
+    function handleOnline() {
+      connectNow("online");
+    }
+
+    function handlePageShow() {
+      connectNow("pageshow");
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        connectNow("visible");
+      }
     }
 
     function emitLeaveRoomAndDisconnect(reason: string) {
@@ -476,27 +551,35 @@ export default function RoomPage() {
     // Socket.io events keep this room page synced with the in-memory server room.
     currentSocket.on("connect", handleConnect);
     currentSocket.on("disconnect", handleDisconnect);
+    currentSocket.on("connect_error", handleConnectError);
     currentSocket.on("room-updated", handleRoomUpdated);
     currentSocket.on("game-started", handleGameStarted);
     currentSocket.on("session-restored", handleSessionRestored);
     currentSocket.on("error-message", handleErrorMessage);
     currentSocket.io.on("reconnect_attempt", handleReconnectAttempt);
-    if (!currentSocket.connected) {
-      currentSocket.connect();
-    } else {
-      handleConnect();
-    }
+    currentSocket.io.on("reconnect", handleReconnectSuccess);
+    currentSocket.io.on("reconnect_error", handleReconnectFailure);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("pageshow", handlePageShow);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    connectNow("effect");
 
     return () => {
       // Delay cleanup so React Strict Mode remounts do not delete an active room.
       scheduleLeaveRoomAndDisconnect();
       currentSocket.off("connect", handleConnect);
       currentSocket.off("disconnect", handleDisconnect);
+      currentSocket.off("connect_error", handleConnectError);
       currentSocket.off("room-updated", handleRoomUpdated);
       currentSocket.off("game-started", handleGameStarted);
       currentSocket.off("session-restored", handleSessionRestored);
       currentSocket.off("error-message", handleErrorMessage);
       currentSocket.io.off("reconnect_attempt", handleReconnectAttempt);
+      currentSocket.io.off("reconnect", handleReconnectSuccess);
+      currentSocket.io.off("reconnect_error", handleReconnectFailure);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("pageshow", handlePageShow);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [isAuthLoading, session.avatarUrl, session.playerName, session.roomCode, stablePlayerId]);
 
