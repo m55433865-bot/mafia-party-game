@@ -14,13 +14,15 @@ import {
 } from "../../lib/mafiaProfile";
 import { RoleImagePreloader } from "../../components/RoleImagePreloader";
 import { getRoleCard } from "../../lib/roles";
-import { socket } from "../../lib/socket";
+import { getStablePlayerId, socket } from "../../lib/socket";
 import { supabase } from "../../lib/supabase";
 
 type Player = {
   alive: boolean;
   avatarUrl: string;
   color: string;
+  connected: boolean;
+  disconnectedAt: number;
   icon: string;
   id: string;
   name: string;
@@ -38,6 +40,7 @@ type RoomUpdate = {
   allAlivePlayersVoted: boolean;
   confirmationResponses: string[];
   confirmationVoterIds: string[];
+  cupidLoverIds: string[];
   defenseEndsAt: number;
   gameOver: boolean;
   gameStarted: boolean;
@@ -46,6 +49,7 @@ type RoomUpdate = {
   nightStep: string;
   pendingEliminationId: string;
   phase: string;
+  ownRole: string;
   playerColors: string[];
   playerIcons: string[];
   playerRoles: Record<string, string>;
@@ -76,6 +80,7 @@ type VoteTarget = {
 };
 
 let pendingLeaveTimeout: number | null = null;
+let isManualLeaveInProgress = false;
 
 const fallbackPlayerColors = [
   "#f87171",
@@ -107,13 +112,14 @@ export default function RoomPage() {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [confirmationResponses, setConfirmationResponses] = useState<string[]>([]);
   const [confirmationVoterIds, setConfirmationVoterIds] = useState<string[]>([]);
+  const [cupidLoverIds, setCupidLoverIds] = useState<string[]>([]);
   const [defenseEndsAt, setDefenseEndsAt] = useState(0);
   const [error, setError] = useState("");
   const [gameOver, setGameOver] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
   const [phase, setPhase] = useState("lobby");
   const [role, setRole] = useState("");
-  const [socketId, setSocketId] = useState("");
+  const [socketId, setSocketId] = useState(() => getStablePlayerId());
   const [lastEliminatedPlayerId, setLastEliminatedPlayerId] = useState("");
   const [nightResultMessage, setNightResultMessage] = useState("");
   const [pendingEliminationId, setPendingEliminationId] = useState("");
@@ -139,12 +145,15 @@ export default function RoomPage() {
   const [voteCounts, setVoteCounts] = useState<Record<string, number>>({});
   const [votingStatus, setVotingStatus] = useState<Record<string, boolean>>({});
   const [selectedVote, setSelectedVote] = useState("");
+  const [selectedCupidLoverIds, setSelectedCupidLoverIds] = useState<string[]>([]);
   const [selectedConfirmationTarget, setSelectedConfirmationTarget] = useState("");
   const [timerNow, setTimerNow] = useState(0);
   const [moderatorTimerSeconds, setModeratorTimerSeconds] = useState(0);
   const [isModeratorTimerRunning, setIsModeratorTimerRunning] = useState(false);
   const [voteSubmitted, setVoteSubmitted] = useState(false);
   const [winner, setWinner] = useState("");
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const stablePlayerId = useMemo(() => getStablePlayerId(), []);
 
   const fallbackSession = JSON.stringify({
     avatarUrl: "",
@@ -263,7 +272,7 @@ export default function RoomPage() {
       }
 
       const currentPlayer = room.players.find(
-        (player) => player.id === currentSocket.id,
+        (player) => player.id === stablePlayerId,
       );
 
       if (currentPlayer) {
@@ -292,10 +301,14 @@ export default function RoomPage() {
       setAllAlivePlayersVoted(room.allAlivePlayersVoted);
       setConfirmationResponses(room.confirmationResponses);
       setConfirmationVoterIds(room.confirmationVoterIds);
+      setCupidLoverIds(room.cupidLoverIds);
       setDefenseEndsAt(room.defenseEndsAt);
       setGameOver(room.gameOver);
       setGameStarted(room.gameStarted);
       setPhase(room.phase);
+      if (room.ownRole) {
+        setRole(room.ownRole);
+      }
       setLastEliminatedPlayerId(room.lastEliminatedPlayerId);
       setNightResultMessage(room.nightResultMessage);
       setPendingEliminationId(room.pendingEliminationId);
@@ -367,13 +380,55 @@ export default function RoomPage() {
     }
 
     function handleConnect() {
-      setSocketId(currentSocket.id ?? "");
+      setSocketId(stablePlayerId);
+      setIsReconnecting(false);
+      currentSocket.emit("join-room", {
+        avatarUrl: session.avatarUrl,
+        playerId: stablePlayerId,
+        playerName: session.playerName,
+        roomCode: session.roomCode,
+      });
+    }
+
+    function handleDisconnect(reason: string) {
+      console.log("client reconnecting after disconnect", {
+        playerId: stablePlayerId,
+        reason,
+        roomCode: session.roomCode,
+      });
+      setIsReconnecting(true);
+    }
+
+    function handleReconnectAttempt(attempt: number) {
+      console.log("client reconnect attempt", {
+        attempt,
+        playerId: stablePlayerId,
+        roomCode: session.roomCode,
+      });
+      setIsReconnecting(true);
+    }
+
+    function handleSessionRestored(restoredSession: {
+      phase: string;
+      playerId: string;
+      role: string;
+      roomCode: string;
+    }) {
+      if (restoredSession.roomCode !== session.roomCode) {
+        return;
+      }
+
+      console.log("client session restore", restoredSession);
+      setSocketId(restoredSession.playerId);
+      setRole(restoredSession.role);
+      setPhase(restoredSession.phase);
+      setIsReconnecting(false);
     }
 
     function emitLeaveRoomAndDisconnect(reason: string) {
       const leavePayload = {
         roomCode: session.roomCode,
-        playerId: currentSocket.id,
+        playerId: stablePlayerId,
         playerName: session.playerName,
       };
 
@@ -395,6 +450,10 @@ export default function RoomPage() {
     }
 
     function scheduleLeaveRoomAndDisconnect() {
+      if (isManualLeaveInProgress) {
+        return;
+      }
+
       if (pendingLeaveTimeout) {
         window.clearTimeout(pendingLeaveTimeout);
       }
@@ -413,39 +472,32 @@ export default function RoomPage() {
       }, 150);
     }
 
-    function handleBeforeUnload() {
-      emitLeaveRoomAndDisconnect("beforeunload");
-    }
-
     // Socket.io events keep this room page synced with the in-memory server room.
     currentSocket.on("connect", handleConnect);
+    currentSocket.on("disconnect", handleDisconnect);
     currentSocket.on("room-updated", handleRoomUpdated);
     currentSocket.on("game-started", handleGameStarted);
+    currentSocket.on("session-restored", handleSessionRestored);
     currentSocket.on("error-message", handleErrorMessage);
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    setSocketId(currentSocket.id ?? "");
-
+    currentSocket.io.on("reconnect_attempt", handleReconnectAttempt);
     if (!currentSocket.connected) {
       currentSocket.connect();
+    } else {
+      handleConnect();
     }
-
-    // Socket.io join keeps the room page synced after navigation or refresh.
-    currentSocket.emit("join-room", {
-      avatarUrl: session.avatarUrl,
-      playerName: session.playerName,
-      roomCode: session.roomCode,
-    });
 
     return () => {
       // Delay cleanup so React Strict Mode remounts do not delete an active room.
       scheduleLeaveRoomAndDisconnect();
-      window.removeEventListener("beforeunload", handleBeforeUnload);
       currentSocket.off("connect", handleConnect);
+      currentSocket.off("disconnect", handleDisconnect);
       currentSocket.off("room-updated", handleRoomUpdated);
       currentSocket.off("game-started", handleGameStarted);
+      currentSocket.off("session-restored", handleSessionRestored);
       currentSocket.off("error-message", handleErrorMessage);
+      currentSocket.io.off("reconnect_attempt", handleReconnectAttempt);
     };
-  }, [isAuthLoading, session.avatarUrl, session.playerName, session.roomCode]);
+  }, [isAuthLoading, session.avatarUrl, session.playerName, session.roomCode, stablePlayerId]);
 
   useEffect(() => {
     if (!defenseEndsAt) {
@@ -479,6 +531,8 @@ export default function RoomPage() {
             alive: true,
             avatarUrl: session.avatarUrl,
             color: "#f5f5f4",
+            connected: true,
+            disconnectedAt: 0,
             icon: "🙂",
             id: "local-player",
             name: session.playerName || "Unknown player",
@@ -524,6 +578,21 @@ export default function RoomPage() {
     player,
     role: playerRoles[player.id] ?? "Unknown",
   }));
+  const mafiaTeamEntries = gamePlayers
+    .filter((player) => {
+      const playerRole = playerRoles[player.id];
+
+      return playerRole === "Mafia" || playerRole === "Mafia Jester";
+    })
+    .map((player) => ({
+      player,
+      role: playerRoles[player.id],
+    }));
+  const cupidLoverEntries = cupidLoverIds
+    .map((loverId) => getPlayer(loverId))
+    .filter((player): player is Player => Boolean(player));
+  const isCurrentPlayerCupidLover = cupidLoverIds.includes(socketId);
+  const cupidIsInGame = Object.values(playerRoles).includes("Cupid");
   const isCurrentPlayerAlive = currentPlayer?.isHost
     ? true
     : (currentPlayer?.alive ?? true);
@@ -697,6 +766,25 @@ export default function RoomPage() {
     });
   }
 
+  function handleToggleCupidLover(playerId: string) {
+    setError("");
+    setSelectedCupidLoverIds((currentIds) => {
+      if (currentIds.includes(playerId)) {
+        return currentIds.filter((currentId) => currentId !== playerId);
+      }
+
+      return [...currentIds.slice(-1), playerId];
+    });
+  }
+
+  function handleSetCupidLovers() {
+    setError("");
+    socketRef.current.emit("set-cupid-lovers", {
+      loverIds: selectedCupidLoverIds,
+      roomCode: session.roomCode,
+    });
+  }
+
   function handleToggleModeratorTimer() {
     if (!isModeratorTimerRunning) {
       setModeratorTimerSeconds(0);
@@ -723,20 +811,36 @@ export default function RoomPage() {
 
   function handleLeaveLobby() {
     setError("");
+    isManualLeaveInProgress = true;
     sessionStorage.removeItem("playerName");
     sessionStorage.removeItem("avatarUrl");
     sessionStorage.removeItem("roomCode");
     sessionStorage.removeItem("isHost");
 
     if (!socketRef.current.connected) {
-      router.push("/");
+      socketRef.current.connect();
+      socketRef.current.once("connect", () => {
+        socketRef.current.emit(
+          "leave-room",
+          {
+            playerId: stablePlayerId,
+            playerName: session.playerName,
+            roomCode: session.roomCode,
+          },
+          () => {
+            socketRef.current.disconnect();
+            router.push("/");
+          },
+        );
+      });
+      window.setTimeout(() => router.push("/"), 1200);
       return;
     }
 
     socketRef.current.emit(
       "leave-room",
       {
-        playerId: socketRef.current.id,
+        playerId: stablePlayerId,
         playerName: session.playerName,
         roomCode: session.roomCode,
       },
@@ -788,6 +892,11 @@ export default function RoomPage() {
         <span className={!player.isHost && !player.alive ? "line-through" : ""}>
           {player.name}
         </span>
+        {!player.connected ? (
+          <span className="text-xs font-bold text-amber-200">
+            (reconnecting...)
+          </span>
+        ) : null}
       </span>
     );
   }
@@ -811,6 +920,12 @@ export default function RoomPage() {
         <h1 className="mt-4 text-6xl font-bold tracking-wider">
           {session.roomCode}
         </h1>
+
+        {isReconnecting ? (
+          <p className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm font-bold text-amber-100">
+            Reconnecting...
+          </p>
+        ) : null}
 
         {gameStarted ? (
           <div
@@ -1045,6 +1160,46 @@ export default function RoomPage() {
           </div>
         ) : null}
 
+        {gameStarted && !isCurrentHost && mafiaTeamEntries.length > 1 ? (
+          <div className="mt-5 rounded-2xl border border-red-500/20 bg-red-500/10 p-5 text-left">
+            <h2 className="text-xl font-bold text-red-100">Mafia Team</h2>
+            <div className="mt-4 flex flex-col gap-3">
+              {mafiaTeamEntries.map(({ player, role: mafiaRole }) => (
+                <div
+                  key={player.id}
+                  className="flex items-center justify-between gap-3 rounded-xl bg-zinc-950 px-4 py-3"
+                >
+                  {renderPlayerName(player)}
+                  <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-sm font-bold text-red-100">
+                    {mafiaRole}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {gameStarted && !isCurrentHost && isCurrentPlayerCupidLover ? (
+          <div className="mt-5 rounded-2xl border border-pink-500/30 bg-pink-500/10 p-5 text-left">
+            <h2 className="text-xl font-bold text-pink-100">Cupid Lovers</h2>
+            <div className="mt-4 flex flex-col gap-3">
+              {cupidLoverEntries.map((lover) => (
+                <div
+                  key={lover.id}
+                  className="flex items-center justify-between rounded-xl bg-zinc-950 px-4 py-3"
+                >
+                  {renderPlayerName(lover)}
+                  {lover.id === socketId ? (
+                    <span className="rounded-full bg-pink-500/10 px-3 py-1 text-sm font-bold text-pink-100">
+                      You
+                    </span>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         {gameStarted && isCurrentHost ? (
           <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
             <h2 className="text-xl font-bold">Moderator Timer</h2>
@@ -1088,6 +1243,54 @@ export default function RoomPage() {
                 );
               })}
             </div>
+          </div>
+        ) : null}
+
+        {gameStarted && isCurrentHost ? (
+          <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
+            <h2 className="text-xl font-bold">Cupid Lovers</h2>
+            {cupidIsInGame ? (
+              <>
+                <div className="mt-4 flex flex-col gap-3">
+                  {alivePlayers
+                    .filter((player) => !player.isHost)
+                    .map((player) => {
+                      const isSelected = selectedCupidLoverIds.includes(player.id);
+                      const isCurrentLover = cupidLoverIds.includes(player.id);
+
+                      return (
+                        <button
+                          key={player.id}
+                          onClick={() => handleToggleCupidLover(player.id)}
+                          className={`flex min-h-14 items-center justify-between rounded-xl border px-4 text-left transition ${
+                            isSelected
+                              ? "border-pink-400 bg-pink-500/10"
+                              : "border-zinc-800 bg-zinc-950 hover:border-zinc-600"
+                          }`}
+                          type="button"
+                        >
+                          {renderPlayerName(player)}
+                          <span className="text-sm font-bold text-pink-100">
+                            {isCurrentLover ? "Lover" : isSelected ? "Selected" : "Pick"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                </div>
+                <button
+                  onClick={handleSetCupidLovers}
+                  disabled={selectedCupidLoverIds.length !== 2}
+                  className="mt-4 min-h-14 w-full rounded-xl bg-pink-500 px-4 text-base font-bold text-white transition hover:bg-pink-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+                  type="button"
+                >
+                  Create Lovers Table
+                </button>
+              </>
+            ) : (
+              <p className="mt-3 text-sm text-zinc-400">
+                Cupid is not in this game.
+              </p>
+            )}
           </div>
         ) : null}
 

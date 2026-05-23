@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME ?? (dev ? "localhost" : "0.0.0.0");
 const port = Number(process.env.PORT) || 3000;
+const RECONNECT_GRACE_MS = 2 * 60 * 1000;
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
@@ -58,6 +59,10 @@ const ROLE_OPTIONS = [
 
 function isMafiaRole(role) {
   return role === "Mafia" || role === "Mafia Jester";
+}
+
+function getSocketPlayerId(socket) {
+  return String(socket.data.playerId ?? socket.id);
 }
 
 function isDetectiveMafiaResult(role) {
@@ -137,12 +142,18 @@ function getAlivePlayersByRole(room, roleName) {
   );
 }
 
+function getAliveMafiaPlayers(room) {
+  return getAliveGamePlayers(room).filter((player) =>
+    isMafiaRole(room.roles.get(player.id)),
+  );
+}
+
 function getNextNightStep(room) {
   if (getAlivePlayersByRole(room, "Detective").length > 0) {
     return "Detective";
   }
 
-  if (getAlivePlayersByRole(room, "Mafia").length > 0) {
+  if (getAliveMafiaPlayers(room).length > 0) {
     return "Mafia";
   }
 
@@ -161,10 +172,26 @@ function formatRoom(roomCode, room, viewerId = "") {
     room.revealVoteCounts ||
     (["defense", "confirmation", "simple-vote-results"].includes(room.phase) &&
       viewerId === room.hostId);
+  const viewerRole = room.roles.get(viewerId);
+  const canSeeMafiaRoles = isMafiaRole(viewerRole);
+  const canSeeCupidLovers =
+    viewerId === room.hostId || room.cupidLoverIds.includes(viewerId);
 
   for (const player of alivePlayers) {
     votingStatus[player.id] = room.votes.has(player.id);
   }
+
+  const publicPlayers = Array.from(room.players.values()).map((player) => ({
+    alive: player.alive,
+    avatarUrl: player.avatarUrl,
+    color: player.color,
+    connected: player.connected,
+    disconnectedAt: player.disconnectedAt,
+    icon: player.icon,
+    id: player.id,
+    isHost: player.isHost,
+    name: player.name,
+  }));
 
   return {
     allAlivePlayersVoted:
@@ -172,6 +199,7 @@ function formatRoom(roomCode, room, viewerId = "") {
       alivePlayers.every((player) => room.votes.has(player.id)),
     confirmationResponses: Array.from(room.confirmationResponses),
     confirmationVoterIds,
+    cupidLoverIds: canSeeCupidLovers ? room.cupidLoverIds : [],
     defenseEndsAt: room.defenseEndsAt,
     gameStarted: room.gameStarted,
     gameOver: room.gameOver,
@@ -186,10 +214,20 @@ function formatRoom(roomCode, room, viewerId = "") {
     revealVoteCounts: room.revealVoteCounts,
     roleOptions: ROLE_OPTIONS,
     roomCode,
-    players: Array.from(room.players.values()),
+    players: publicPlayers,
+    ownRole:
+      viewerId === room.hostId
+        ? "Moderator"
+        : viewerRole ?? "",
     playerRoles:
       viewerId === room.hostId
         ? Object.fromEntries(room.roles.entries())
+        : canSeeMafiaRoles
+          ? Object.fromEntries(
+              Array.from(room.roles.entries()).filter(([, role]) =>
+                isMafiaRole(role),
+              ),
+            )
         : {},
     selectedRoles: room.selectedRoles,
     voteTargets: canSeeVoteResults ? room.lastVoteTargets : [],
@@ -201,7 +239,9 @@ function formatRoom(roomCode, room, viewerId = "") {
 
 function emitRoomUpdated(io, roomCode, room) {
   for (const player of room.players.values()) {
-    io.to(player.id).emit("room-updated", formatRoom(roomCode, room, player.id));
+    if (player.connected && player.socketId) {
+      io.to(player.socketId).emit("room-updated", formatRoom(roomCode, room, player.id));
+    }
   }
 }
 
@@ -300,10 +340,14 @@ function assignSelectedRoles(players, selectedRoles) {
 }
 
 function emitGameStarted(io, roomCode, room) {
-  const publicPlayers = Array.from(room.players.values());
+  const publicPlayers = formatRoom(roomCode, room).players;
 
-  for (const player of publicPlayers) {
-    io.to(player.id).emit("game-started", {
+  for (const player of room.players.values()) {
+    if (!player.connected || !player.socketId) {
+      continue;
+    }
+
+    io.to(player.socketId).emit("game-started", {
       phase: room.phase,
       gameOver: room.gameOver,
       roomCode,
@@ -364,6 +408,7 @@ function resetRoomToLobby(room) {
   room.gameStarted = false;
   room.confirmationResponses = new Set();
   room.confirmationChangedVoters = new Set();
+  room.cupidLoverIds = [];
   room.defenseEndsAt = 0;
   room.lastEliminatedPlayerId = "";
   room.lastVoteCounts = {};
@@ -444,6 +489,12 @@ function findPlayerId(socket, room, playerId, playerName) {
     return socket.id;
   }
 
+  const socketPlayerId = getSocketPlayerId(socket);
+
+  if (room.players.has(socketPlayerId)) {
+    return socketPlayerId;
+  }
+
   for (const [savedPlayerId, player] of room.players.entries()) {
     if (playerName && player.name === playerName) {
       return savedPlayerId;
@@ -472,6 +523,12 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
 
   if (!leavingPlayerId) {
     return;
+  }
+
+  const leavingPlayer = room.players.get(leavingPlayerId);
+
+  if (leavingPlayer?.reconnectTimeout) {
+    clearTimeout(leavingPlayer.reconnectTimeout);
   }
 
   room.players.delete(leavingPlayerId);
@@ -504,7 +561,7 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
     }
   }
 
-  socket.leave(cleanRoomCode);
+  socket.leave?.(cleanRoomCode);
 
   if (room.players.size === 0) {
     console.log("room deleted", {
@@ -520,7 +577,9 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
       playerId: leavingPlayerId,
     });
 
-    const nextHost = room.players.values().next().value;
+    const nextHost =
+      Array.from(room.players.values()).find((player) => player.connected) ??
+      room.players.values().next().value;
     room.hostId = nextHost.id;
     nextHost.isHost = true;
     nextHost.alive = false;
@@ -543,12 +602,63 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
   emitRoomUpdated(io, cleanRoomCode, room);
 }
 
-function removePlayerFromAllRooms(io, socket, rooms) {
-  for (const roomCode of Array.from(rooms.keys())) {
-    removePlayerFromRoom(io, socket, rooms, {
-      roomCode,
-      playerId: socket.id,
+function markPlayerDisconnected(io, rooms, roomCode, playerId, reason) {
+  const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+  const room = rooms.get(cleanRoomCode);
+  const player = room?.players.get(playerId);
+
+  if (!room || !player || !player.connected) {
+    return;
+  }
+
+  player.connected = false;
+  player.disconnectedAt = Date.now();
+  player.socketId = "";
+
+  console.log("player temporarily disconnected", {
+    roomCode: cleanRoomCode,
+    playerId,
+    playerName: player.name,
+    reason,
+  });
+
+  if (player.reconnectTimeout) {
+    clearTimeout(player.reconnectTimeout);
+  }
+
+  player.reconnectTimeout = setTimeout(() => {
+    const currentRoom = rooms.get(cleanRoomCode);
+    const currentPlayer = currentRoom?.players.get(playerId);
+
+    if (!currentRoom || !currentPlayer || currentPlayer.connected) {
+      return;
+    }
+
+    console.log("reconnect timeout expired", {
+      roomCode: cleanRoomCode,
+      playerId,
+      playerName: currentPlayer.name,
     });
+
+    removePlayerFromRoom(io, { id: playerId, data: { playerId }, leave: () => {} }, rooms, {
+      roomCode: cleanRoomCode,
+      playerId,
+    });
+  }, RECONNECT_GRACE_MS);
+
+  emitRoomUpdated(io, cleanRoomCode, room);
+}
+
+function markPlayerDisconnectedFromAllRooms(io, socket, rooms, reason) {
+  const playerId = getSocketPlayerId(socket);
+
+  for (const roomCode of Array.from(rooms.keys())) {
+    const room = rooms.get(roomCode);
+    const player = room?.players.get(playerId);
+
+    if (player?.socketId === socket.id) {
+      markPlayerDisconnected(io, rooms, roomCode, playerId, reason);
+    }
   }
 }
 
@@ -561,9 +671,16 @@ app.prepare().then(() => {
   const rooms = new Map();
 
   io.on("connection", (socket) => {
+    const authPlayerId = String(socket.handshake.auth?.playerId ?? "").trim();
+
+    if (authPlayerId) {
+      socket.data.playerId = authPlayerId;
+    }
+
     // Host creates a room on the server so the code is real before navigation.
-    socket.on("create-room", ({ avatarUrl, playerName }) => {
+    socket.on("create-room", ({ avatarUrl, playerId, playerName }) => {
       const cleanAvatarUrl = String(avatarUrl ?? "").trim();
+      const cleanPlayerId = String(playerId ?? "").trim() || socket.id;
       const cleanPlayerName = String(playerName ?? "").trim();
 
       if (!cleanPlayerName) {
@@ -575,10 +692,11 @@ app.prepare().then(() => {
       rooms.set(roomCode, {
         confirmationResponses: new Set(),
         confirmationChangedVoters: new Set(),
+        cupidLoverIds: [],
         defenseEndsAt: 0,
         gameOver: false,
         gameStarted: false,
-        hostId: socket.id,
+        hostId: cleanPlayerId,
         lastEliminatedPlayerId: "",
         lastVoteCounts: {},
         lastVoteTargets: [],
@@ -605,10 +723,14 @@ app.prepare().then(() => {
         alive: false,
         avatarUrl: cleanAvatarUrl,
         color: getRandomAvailableColor(room),
+        connected: true,
+        disconnectedAt: 0,
         icon: cleanAvatarUrl ? "" : getRandomAvailableIcon(room),
-        id: socket.id,
+        id: cleanPlayerId,
         name: cleanPlayerName,
         isHost: true,
+        reconnectTimeout: null,
+        socketId: socket.id,
       };
 
       if (!player.color || (!player.avatarUrl && !player.icon)) {
@@ -617,11 +739,13 @@ app.prepare().then(() => {
         return;
       }
 
-      room.players.set(socket.id, player);
+      room.players.set(cleanPlayerId, player);
+      socket.data.playerId = cleanPlayerId;
+      socket.data.roomCode = roomCode;
 
       console.log("room created", {
         roomCode,
-        hostId: socket.id,
+        hostId: cleanPlayerId,
         playerName: cleanPlayerName,
       });
 
@@ -630,8 +754,9 @@ app.prepare().then(() => {
     });
 
     // Players can join only rooms already created in server memory.
-    socket.on("join-room", ({ avatarUrl, playerName, roomCode }) => {
+    socket.on("join-room", ({ avatarUrl, playerId, playerName, roomCode }) => {
       const cleanAvatarUrl = String(avatarUrl ?? "").trim();
+      const cleanPlayerId = String(playerId ?? "").trim() || socket.id;
       const cleanPlayerName = String(playerName ?? "").trim();
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
@@ -646,6 +771,40 @@ app.prepare().then(() => {
         return;
       }
 
+      const existingPlayer = room.players.get(cleanPlayerId);
+
+      if (existingPlayer) {
+        if (existingPlayer.reconnectTimeout) {
+          clearTimeout(existingPlayer.reconnectTimeout);
+          existingPlayer.reconnectTimeout = null;
+        }
+
+        existingPlayer.avatarUrl = cleanAvatarUrl || existingPlayer.avatarUrl;
+        existingPlayer.connected = true;
+        existingPlayer.disconnectedAt = 0;
+        existingPlayer.name = cleanPlayerName || existingPlayer.name;
+        existingPlayer.socketId = socket.id;
+        socket.data.playerId = cleanPlayerId;
+        socket.data.roomCode = cleanRoomCode;
+        socket.join(cleanRoomCode);
+
+        console.log("session restore success", {
+          roomCode: cleanRoomCode,
+          playerId: cleanPlayerId,
+          playerName: existingPlayer.name,
+          phase: room.phase,
+        });
+
+        socket.emit("session-restored", {
+          roomCode: cleanRoomCode,
+          playerId: cleanPlayerId,
+          role: existingPlayer.isHost ? "Moderator" : room.roles.get(cleanPlayerId) ?? "",
+          phase: room.phase,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        return;
+      }
+
       if (room.gameStarted) {
         socket.emit("error-message", "Game already started.");
         return;
@@ -655,10 +814,14 @@ app.prepare().then(() => {
         alive: true,
         avatarUrl: cleanAvatarUrl,
         color: getRandomAvailableColor(room),
+        connected: true,
+        disconnectedAt: 0,
         icon: cleanAvatarUrl ? "" : getRandomAvailableIcon(room),
-        id: socket.id,
+        id: cleanPlayerId,
         name: cleanPlayerName,
-        isHost: room.hostId === socket.id,
+        isHost: room.hostId === cleanPlayerId,
+        reconnectTimeout: null,
+        socketId: socket.id,
       };
 
       if (!player.color || (!player.avatarUrl && !player.icon)) {
@@ -666,12 +829,14 @@ app.prepare().then(() => {
         return;
       }
 
-      room.players.set(socket.id, player);
+      room.players.set(cleanPlayerId, player);
+      socket.data.playerId = cleanPlayerId;
+      socket.data.roomCode = cleanRoomCode;
       socket.join(cleanRoomCode);
 
       console.log("player joined", {
         roomCode: cleanRoomCode,
-        playerId: socket.id,
+        playerId: cleanPlayerId,
         playerName: cleanPlayerName,
         isHost: player.isHost,
       });
@@ -699,14 +864,15 @@ app.prepare().then(() => {
         return;
       }
 
-      const player = room.players.get(socket.id);
+      const playerId = getSocketPlayerId(socket);
+      const player = room.players.get(playerId);
 
       if (!player) {
         socket.emit("error-message", "Player not found.");
         return;
       }
 
-      if (getUsedColors(room, socket.id).has(cleanColor)) {
+      if (getUsedColors(room, playerId).has(cleanColor)) {
         socket.emit("error-message", "That color is already taken.");
         return;
       }
@@ -735,7 +901,8 @@ app.prepare().then(() => {
         return;
       }
 
-      const player = room.players.get(socket.id);
+      const playerId = getSocketPlayerId(socket);
+      const player = room.players.get(playerId);
 
       if (!player) {
         socket.emit("error-message", "Player not found.");
@@ -747,7 +914,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (getUsedIcons(room, socket.id).has(cleanIcon)) {
+      if (getUsedIcons(room, playerId).has(cleanIcon)) {
         socket.emit("error-message", "That icon is already taken.");
         return;
       }
@@ -766,7 +933,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the moderator can edit roles.");
         return;
       }
@@ -795,7 +962,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the moderator can edit roles.");
         return;
       }
@@ -828,17 +995,18 @@ app.prepare().then(() => {
         return;
       }
 
-      const player = room.players.get(socket.id);
+      const playerId = getSocketPlayerId(socket);
+      const player = room.players.get(playerId);
 
       if (!player || player.isHost) {
         socket.emit("error-message", "Only players can ready up.");
         return;
       }
 
-      if (room.readyPlayerIds.has(socket.id)) {
-        room.readyPlayerIds.delete(socket.id);
+      if (room.readyPlayerIds.has(playerId)) {
+        room.readyPlayerIds.delete(playerId);
       } else {
-        room.readyPlayerIds.add(socket.id);
+        room.readyPlayerIds.add(playerId);
       }
 
       emitRoomUpdated(io, cleanRoomCode, room);
@@ -853,12 +1021,58 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the host can cancel the game.");
         return;
       }
 
       resetRoomToLobby(room);
+      emitRoomUpdated(io, cleanRoomCode, room);
+    });
+
+    socket.on("set-cupid-lovers", ({ roomCode, loverIds }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const cleanLoverIds = Array.isArray(loverIds)
+        ? loverIds.map((loverId) => String(loverId ?? "").trim()).filter(Boolean)
+        : [];
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room || !room.gameStarted || room.gameOver) {
+        socket.emit("error-message", "Cupid lovers can only be set during a game.");
+        return;
+      }
+
+      if (room.hostId !== getSocketPlayerId(socket)) {
+        socket.emit("error-message", "Only the moderator can set Cupid lovers.");
+        return;
+      }
+
+      if (!Array.from(room.roles.values()).includes("Cupid")) {
+        socket.emit("error-message", "Cupid is not in this game.");
+        return;
+      }
+
+      if (cleanLoverIds.length !== 2 || cleanLoverIds[0] === cleanLoverIds[1]) {
+        socket.emit("error-message", "Choose two different lovers.");
+        return;
+      }
+
+      const lovers = cleanLoverIds.map((loverId) => room.players.get(loverId));
+
+      if (
+        lovers.some(
+          (lover) => !lover || lover.isHost || !lover.alive,
+        )
+      ) {
+        socket.emit("error-message", "Choose two alive players.");
+        return;
+      }
+
+      room.cupidLoverIds = cleanLoverIds;
+      console.log("cupid lovers set", {
+        roomCode: cleanRoomCode,
+        loverIds: cleanLoverIds,
+      });
       emitRoomUpdated(io, cleanRoomCode, room);
     });
 
@@ -869,6 +1083,7 @@ app.prepare().then(() => {
       console.log("server received start-game", {
         roomCode: cleanRoomCode,
         socketId: socket.id,
+        playerId: getSocketPlayerId(socket),
       });
 
       if (!room) {
@@ -876,7 +1091,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the host can start the game.");
         return;
       }
@@ -899,6 +1114,7 @@ app.prepare().then(() => {
       room.gameStarted = true;
       room.gameOver = false;
       room.phase = "simple";
+      room.cupidLoverIds = [];
       room.votes = new Map();
       room.revealVoteCounts = false;
       for (const player of room.players.values()) {
@@ -925,7 +1141,8 @@ app.prepare().then(() => {
         return;
       }
 
-      const voter = room.players.get(socket.id);
+      const voterId = getSocketPlayerId(socket);
+      const voter = room.players.get(voterId);
       const targetPlayer = room.players.get(cleanTargetPlayerId);
 
       if (!voter || voter.isHost || !targetPlayer || targetPlayer.isHost) {
@@ -961,7 +1178,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the moderator can open voting.");
         return;
       }
@@ -983,7 +1200,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the host can end voting.");
         return;
       }
@@ -1022,7 +1239,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the moderator can reveal votes.");
         return;
       }
@@ -1040,7 +1257,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the moderator can clear votes.");
         return;
       }
@@ -1063,7 +1280,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the moderator can kill players.");
         return;
       }
@@ -1096,7 +1313,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the moderator can finish defense.");
         return;
       }
@@ -1118,21 +1335,22 @@ app.prepare().then(() => {
         return;
       }
 
-      const voter = room.players.get(socket.id);
+      const voterId = getSocketPlayerId(socket);
+      const voter = room.players.get(voterId);
       const confirmationVoterIds = getConfirmationVoterIds(room);
 
-      if (!voter || !confirmationVoterIds.includes(socket.id)) {
+      if (!voter || !confirmationVoterIds.includes(voterId)) {
         socket.emit("error-message", "You cannot change this vote.");
         return;
       }
 
-      if (room.confirmationResponses.has(socket.id)) {
+      if (room.confirmationResponses.has(voterId)) {
         socket.emit("error-message", "Your confirmation vote is already submitted.");
         return;
       }
 
       if (cleanChoice === "keep") {
-        room.confirmationResponses.add(socket.id);
+        room.confirmationResponses.add(voterId);
       } else if (cleanChoice === "change") {
         const targetPlayer = room.players.get(cleanTargetPlayerId);
 
@@ -1151,9 +1369,9 @@ app.prepare().then(() => {
           return;
         }
 
-        room.votes.set(socket.id, targetPlayer.id);
-        room.confirmationChangedVoters.add(socket.id);
-        room.confirmationResponses.add(socket.id);
+        room.votes.set(voterId, targetPlayer.id);
+        room.confirmationChangedVoters.add(voterId);
+        room.confirmationResponses.add(voterId);
         setVoteSnapshot(room);
       } else {
         socket.emit("error-message", "Choose keep or change.");
@@ -1172,7 +1390,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the moderator can show the result.");
         return;
       }
@@ -1212,7 +1430,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the host can move to night.");
         return;
       }
@@ -1224,7 +1442,7 @@ app.prepare().then(() => {
     function advanceNightStepOrResolve(cleanRoomCode, room) {
       if (
         room.nightStep === "Detective" &&
-        getAlivePlayersByRole(room, "Mafia").length > 0
+        getAliveMafiaPlayers(room).length > 0
       ) {
         room.nightStep = "Mafia";
       } else if (
@@ -1302,7 +1520,7 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.hostId !== socket.id) {
+      if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the moderator can submit night actions.");
         return;
       }
@@ -1322,11 +1540,13 @@ app.prepare().then(() => {
           const targetRole = room.roles.get(targetPlayer.id);
           const detectedAsMafia = isDetectiveMafiaResult(targetRole);
 
-          io.to(detective.id).emit("detective-result", {
+          if (detective.socketId) {
+            io.to(detective.socketId).emit("detective-result", {
             detectedParty: detectedAsMafia ? "Mafia" : "Villager",
             isMafia: detectedAsMafia,
             targetName: targetPlayer.name,
-          });
+            });
+          }
         }
       } else if (room.nightStep === "Mafia") {
         room.nightActions.mafiaTargetId = targetPlayer.id;
@@ -1344,6 +1564,7 @@ app.prepare().then(() => {
     socket.on("leave-room", ({ roomCode, playerId, playerName } = {}, done) => {
       console.log("leave-room received", {
         socketId: socket.id,
+        socketPlayerId: getSocketPlayerId(socket),
         roomCode,
         playerId,
         playerName,
@@ -1364,10 +1585,11 @@ app.prepare().then(() => {
     socket.on("disconnect", (reason) => {
       console.log("disconnect received", {
         socketId: socket.id,
+        playerId: getSocketPlayerId(socket),
         reason,
       });
 
-      removePlayerFromAllRooms(io, socket, rooms);
+      markPlayerDisconnectedFromAllRooms(io, socket, rooms, reason);
     });
   });
 

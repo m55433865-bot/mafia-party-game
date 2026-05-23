@@ -8,7 +8,7 @@ import {
   isMafiaProfileComplete,
 } from "./lib/mafiaProfile";
 import { RoleImagePreloader } from "./components/RoleImagePreloader";
-import { socket } from "./lib/socket";
+import { getStablePlayerId, socket } from "./lib/socket";
 import { supabase } from "./lib/supabase";
 
 type Player = {
@@ -76,7 +76,9 @@ export default function Home() {
 
   useEffect(() => {
     function handleRoomUpdated(room: RoomUpdate) {
-      const currentPlayer = room.players.find((player) => player.id === socket.id);
+      const currentPlayer = room.players.find(
+        (player) => player.id === getStablePlayerId(),
+      );
 
       if (!currentPlayer) {
         return;
@@ -138,6 +140,7 @@ export default function Home() {
     resetAndConnect();
     socket.emit("create-room", {
       avatarUrl: profile?.avatar_url ?? "",
+      playerId: getStablePlayerId(),
       playerName,
     });
   }
@@ -159,6 +162,7 @@ export default function Home() {
     resetAndConnect();
     socket.emit("join-room", {
       avatarUrl: profile?.avatar_url ?? "",
+      playerId: getStablePlayerId(),
       playerName,
       roomCode: nextRoomCode,
     });
