@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { RoleImagePreloader } from "../components/RoleImagePreloader";
 import { getRoleCard, roleNames } from "../lib/roles";
 
 export default function RolesPage() {
@@ -11,6 +12,7 @@ export default function RolesPage() {
 
   return (
     <main className="min-h-screen bg-zinc-950 px-5 py-8 text-white">
+      <RoleImagePreloader />
       <section className="mx-auto flex w-full max-w-sm flex-col text-center">
         <button
           onClick={() => router.push("/")}

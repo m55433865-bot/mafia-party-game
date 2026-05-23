@@ -159,8 +159,7 @@ function formatRoom(roomCode, room, viewerId = "") {
   const confirmationVoterIds = getConfirmationVoterIds(room);
   const canSeeVoteResults =
     room.revealVoteCounts ||
-    (room.gameMode === "simple" &&
-      room.phase === "simple-vote-results" &&
+    (["defense", "confirmation", "simple-vote-results"].includes(room.phase) &&
       viewerId === room.hostId);
 
   for (const player of alivePlayers) {
@@ -176,7 +175,6 @@ function formatRoom(roomCode, room, viewerId = "") {
     defenseEndsAt: room.defenseEndsAt,
     gameStarted: room.gameStarted,
     gameOver: room.gameOver,
-    gameMode: room.gameMode,
     lastEliminatedPlayerId: room.lastEliminatedPlayerId,
     nightResultMessage: room.nightResultMessage,
     pendingEliminationId: room.pendingEliminationId,
@@ -272,23 +270,7 @@ function startDefensePhase(room, nomineeId) {
   room.defenseEndsAt = Date.now() + 30000;
   room.pendingEliminationId = nomineeId;
   room.phase = "defense";
-  room.revealVoteCounts = true;
-}
-
-function eliminatePendingPlayer(room) {
-  const eliminatedPlayer = room.players.get(room.pendingEliminationId);
-
-  if (eliminatedPlayer) {
-    eliminatedPlayer.alive = false;
-  }
-
-  room.lastEliminatedPlayerId = room.pendingEliminationId;
-  room.confirmationResponses = new Set();
-  room.confirmationChangedVoters = new Set();
-  room.defenseEndsAt = 0;
-  room.pendingEliminationId = "";
-  setVoteSnapshot(room);
-  room.revealVoteCounts = true;
+  room.revealVoteCounts = false;
 }
 
 function shufflePlayers(players) {
@@ -303,18 +285,6 @@ function shufflePlayers(players) {
   }
 
   return shuffledPlayers;
-}
-
-function assignRoles(players) {
-  const shuffledPlayers = shufflePlayers(players);
-  const roles = new Map();
-  const specialRoles = ["Mafia", "Doctor", "Detective"];
-
-  shuffledPlayers.forEach((player, index) => {
-    roles.set(player.id, specialRoles[index] ?? "Villager");
-  });
-
-  return roles;
 }
 
 function assignSelectedRoles(players, selectedRoles) {
@@ -336,7 +306,6 @@ function emitGameStarted(io, roomCode, room) {
     io.to(player.id).emit("game-started", {
       phase: room.phase,
       gameOver: room.gameOver,
-      gameMode: room.gameMode,
       roomCode,
       role: player.isHost ? "Moderator" : room.roles.get(player.id),
       players: publicPlayers,
@@ -526,7 +495,12 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
     room.confirmationResponses = new Set();
 
     if (!nextNomineeId && ["defense", "confirmation"].includes(room.phase)) {
-      resetDayVotes(room);
+      room.phase = "simple";
+      room.confirmationResponses = new Set();
+      room.defenseEndsAt = 0;
+      room.pendingEliminationId = "";
+      room.revealVoteCounts = false;
+      room.votes = new Map();
     }
   }
 
@@ -566,9 +540,6 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
     });
   }
 
-  if (room.gameMode !== "simple") {
-    checkWinCondition(room);
-  }
   emitRoomUpdated(io, cleanRoomCode, room);
 }
 
@@ -607,7 +578,6 @@ app.prepare().then(() => {
         defenseEndsAt: 0,
         gameOver: false,
         gameStarted: false,
-        gameMode: "simple",
         hostId: socket.id,
         lastEliminatedPlayerId: "",
         lastVoteCounts: {},
@@ -786,36 +756,6 @@ app.prepare().then(() => {
       emitRoomUpdated(io, cleanRoomCode, room);
     });
 
-    socket.on("set-game-mode", ({ roomCode, gameMode }) => {
-      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
-      const cleanGameMode = String(gameMode ?? "").trim();
-      const room = rooms.get(cleanRoomCode);
-
-      if (!room) {
-        socket.emit("error-message", "Room does not exist.");
-        return;
-      }
-
-      if (room.hostId !== socket.id) {
-        socket.emit("error-message", "Only the moderator can change mode.");
-        return;
-      }
-
-      if (room.gameStarted) {
-        socket.emit("error-message", "Mode can only be changed in lobby.");
-        return;
-      }
-
-      if (!["simple", "automated"].includes(cleanGameMode)) {
-        socket.emit("error-message", "Choose a valid game mode.");
-        return;
-      }
-
-      room.gameMode = cleanGameMode;
-      room.readyPlayerIds = new Set();
-      emitRoomUpdated(io, cleanRoomCode, room);
-    });
-
     socket.on("add-selected-role", ({ roomCode, role }) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const cleanRole = String(role ?? "").trim();
@@ -951,29 +891,20 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.gameMode === "simple") {
-        if (room.selectedRoles.length !== gamePlayers.length) {
-          socket.emit("error-message", "Add one role for each player.");
-          return;
-        }
+      if (room.selectedRoles.length !== gamePlayers.length) {
+        socket.emit("error-message", "Add one role for each player.");
+        return;
       }
 
       room.gameStarted = true;
       room.gameOver = false;
-      if (room.gameMode === "simple") {
-        room.phase = "simple";
-        room.votes = new Map();
-        room.revealVoteCounts = false;
-      } else {
-        resetDayVotes(room);
-      }
+      room.phase = "simple";
+      room.votes = new Map();
+      room.revealVoteCounts = false;
       for (const player of room.players.values()) {
         player.alive = !player.isHost;
       }
-      room.roles =
-        room.gameMode === "simple"
-          ? assignSelectedRoles(gamePlayers, room.selectedRoles)
-          : assignRoles(gamePlayers);
+      room.roles = assignSelectedRoles(gamePlayers, room.selectedRoles);
       room.winner = "";
 
       console.log("roles assigned", {
@@ -1025,7 +956,7 @@ app.prepare().then(() => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
 
-      if (!room || !room.gameStarted || room.gameOver || room.gameMode !== "simple") {
+      if (!room || !room.gameStarted || room.gameOver) {
         socket.emit("error-message", "Simple voting is not available.");
         return;
       }
@@ -1068,13 +999,6 @@ app.prepare().then(() => {
 
       const voteCounts = setVoteSnapshot(room);
 
-      if (room.gameMode === "simple") {
-        room.phase = "simple-vote-results";
-        room.revealVoteCounts = false;
-        emitRoomUpdated(io, cleanRoomCode, room);
-        return;
-      }
-
       const nomineeId = getHighestVotedPlayerId(voteCounts);
 
       room.confirmationChangedVoters = new Set();
@@ -1092,7 +1016,6 @@ app.prepare().then(() => {
         !room ||
         !room.gameStarted ||
         room.gameOver ||
-        room.gameMode !== "simple" ||
         room.phase !== "simple-vote-results"
       ) {
         socket.emit("error-message", "Vote results are not ready.");
@@ -1112,7 +1035,7 @@ app.prepare().then(() => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
 
-      if (!room || !room.gameStarted || room.gameMode !== "simple") {
+      if (!room || !room.gameStarted) {
         socket.emit("error-message", "Vote results are not available.");
         return;
       }
@@ -1159,10 +1082,6 @@ app.prepare().then(() => {
         if (voterId === targetPlayer.id || votedPlayerId === targetPlayer.id) {
           room.votes.delete(voterId);
         }
-      }
-
-      if (room.gameMode !== "simple") {
-        checkWinCondition(room);
       }
 
       emitRoomUpdated(io, cleanRoomCode, room);
@@ -1274,11 +1193,11 @@ app.prepare().then(() => {
       if (nextNomineeId && nextNomineeId !== room.pendingEliminationId) {
         startDefensePhase(room, nextNomineeId);
       } else {
-        eliminatePendingPlayer(room);
-
-        if (!checkWinCondition(room)) {
-          room.phase = "day-results";
-        }
+        setVoteSnapshot(room);
+        room.confirmationResponses = new Set();
+        room.defenseEndsAt = 0;
+        room.phase = "simple-vote-results";
+        room.revealVoteCounts = false;
       }
 
       emitRoomUpdated(io, cleanRoomCode, room);

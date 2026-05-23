@@ -12,6 +12,7 @@ import {
   ensureMafiaProfile,
   isMafiaProfileComplete,
 } from "../../lib/mafiaProfile";
+import { RoleImagePreloader } from "../../components/RoleImagePreloader";
 import { getRoleCard } from "../../lib/roles";
 import { socket } from "../../lib/socket";
 import { supabase } from "../../lib/supabase";
@@ -40,7 +41,6 @@ type RoomUpdate = {
   defenseEndsAt: number;
   gameOver: boolean;
   gameStarted: boolean;
-  gameMode: GameMode;
   lastEliminatedPlayerId: string;
   nightResultMessage: string;
   nightStep: string;
@@ -63,7 +63,6 @@ type RoomUpdate = {
 
 type GameStarted = {
   gameOver: boolean;
-  gameMode: GameMode;
   phase: string;
   roomCode: string;
   role: string;
@@ -71,18 +70,10 @@ type GameStarted = {
   voteCounts: Record<string, number>;
 };
 
-type DetectiveResult = {
-  detectedParty: string;
-  isMafia: boolean;
-  targetName: string;
-};
-
 type VoteTarget = {
   targetPlayerId: string;
   voterId: string;
 };
-
-type GameMode = "simple" | "automated";
 
 let pendingLeaveTimeout: number | null = null;
 
@@ -119,17 +110,13 @@ export default function RoomPage() {
   const [defenseEndsAt, setDefenseEndsAt] = useState(0);
   const [error, setError] = useState("");
   const [gameOver, setGameOver] = useState(false);
-  const [gameMode, setGameMode] = useState<GameMode>("simple");
   const [gameStarted, setGameStarted] = useState(false);
   const [phase, setPhase] = useState("lobby");
   const [role, setRole] = useState("");
   const [socketId, setSocketId] = useState("");
   const [lastEliminatedPlayerId, setLastEliminatedPlayerId] = useState("");
   const [nightResultMessage, setNightResultMessage] = useState("");
-  const [nightStep, setNightStep] = useState("");
-  const [nightSelectedTarget, setNightSelectedTarget] = useState("");
   const [pendingEliminationId, setPendingEliminationId] = useState("");
-  const [detectiveResult, setDetectiveResult] = useState("");
   const [playerColors, setPlayerColors] = useState<string[]>([]);
   const [playerIcons, setPlayerIcons] = useState<string[]>([]);
   const [playerRoles, setPlayerRoles] = useState<Record<string, string>>({});
@@ -154,6 +141,8 @@ export default function RoomPage() {
   const [selectedVote, setSelectedVote] = useState("");
   const [selectedConfirmationTarget, setSelectedConfirmationTarget] = useState("");
   const [timerNow, setTimerNow] = useState(0);
+  const [moderatorTimerSeconds, setModeratorTimerSeconds] = useState(0);
+  const [isModeratorTimerRunning, setIsModeratorTimerRunning] = useState(false);
   const [voteSubmitted, setVoteSubmitted] = useState(false);
   const [winner, setWinner] = useState("");
 
@@ -305,12 +294,10 @@ export default function RoomPage() {
       setConfirmationVoterIds(room.confirmationVoterIds);
       setDefenseEndsAt(room.defenseEndsAt);
       setGameOver(room.gameOver);
-      setGameMode(room.gameMode);
       setGameStarted(room.gameStarted);
       setPhase(room.phase);
       setLastEliminatedPlayerId(room.lastEliminatedPlayerId);
       setNightResultMessage(room.nightResultMessage);
-      setNightStep(room.nightStep);
       setPendingEliminationId(room.pendingEliminationId);
       setPlayerColors(room.playerColors);
       setPlayerIcons(room.playerIcons);
@@ -334,17 +321,16 @@ export default function RoomPage() {
       }
 
       if (room.phase === "day") {
-        setNightSelectedTarget("");
-        setDetectiveResult("");
+        setNightResultMessage("");
       }
 
       if (!room.gameStarted) {
-        setDetectiveResult("");
+        setIsModeratorTimerRunning(false);
         setNightResultMessage("");
-        setNightSelectedTarget("");
         setPendingEliminationId("");
         setRole("");
         setRoleCardVisible(true);
+        setModeratorTimerSeconds(0);
         setWinner("");
       }
 
@@ -366,14 +352,11 @@ export default function RoomPage() {
       });
 
       setGameOver(game.gameOver);
-      setGameMode(game.gameMode);
       setGameStarted(true);
       setPhase(game.phase);
       setRole(game.role);
       setPlayers(game.players);
-      setDetectiveResult("");
       setNightResultMessage("");
-      setNightSelectedTarget("");
       setPendingEliminationId("");
       setRevealVoteCounts(false);
       setRoleCardVisible(true);
@@ -385,12 +368,6 @@ export default function RoomPage() {
 
     function handleConnect() {
       setSocketId(currentSocket.id ?? "");
-    }
-
-    function handleDetectiveResult(result: DetectiveResult) {
-      setDetectiveResult(
-        `${result.targetName} (${result.detectedParty})`,
-      );
     }
 
     function emitLeaveRoomAndDisconnect(reason: string) {
@@ -444,7 +421,6 @@ export default function RoomPage() {
     currentSocket.on("connect", handleConnect);
     currentSocket.on("room-updated", handleRoomUpdated);
     currentSocket.on("game-started", handleGameStarted);
-    currentSocket.on("detective-result", handleDetectiveResult);
     currentSocket.on("error-message", handleErrorMessage);
     window.addEventListener("beforeunload", handleBeforeUnload);
     setSocketId(currentSocket.id ?? "");
@@ -467,7 +443,6 @@ export default function RoomPage() {
       currentSocket.off("connect", handleConnect);
       currentSocket.off("room-updated", handleRoomUpdated);
       currentSocket.off("game-started", handleGameStarted);
-      currentSocket.off("detective-result", handleDetectiveResult);
       currentSocket.off("error-message", handleErrorMessage);
     };
   }, [isAuthLoading, session.avatarUrl, session.playerName, session.roomCode]);
@@ -483,6 +458,18 @@ export default function RoomPage() {
 
     return () => window.clearInterval(timer);
   }, [defenseEndsAt]);
+
+  useEffect(() => {
+    if (!gameStarted || !isModeratorTimerRunning) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setModeratorTimerSeconds((seconds) => seconds + 1);
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [gameStarted, isModeratorTimerRunning]);
 
   const currentPlayers =
     players.length > 0
@@ -530,10 +517,8 @@ export default function RoomPage() {
     gamePlayers.length > 0 &&
     gamePlayers.every((player) => readyPlayerIds.includes(player.id));
   const roleCountMatchesPlayers = selectedRoles.length === gamePlayers.length;
-  const canStartSimpleGame =
-    isCurrentHost && gameMode === "simple" && allGamePlayersReady && roleCountMatchesPlayers;
-  const canStartAutomatedGame =
-    isCurrentHost && gameMode === "automated" && allGamePlayersReady;
+  const canStartGame =
+    isCurrentHost && allGamePlayersReady && roleCountMatchesPlayers;
   const currentPlayerReady = readyPlayerIds.includes(socketId);
   const assignedRoleEntries = gamePlayers.map((player) => ({
     player,
@@ -548,17 +533,11 @@ export default function RoomPage() {
     phase === "day" &&
     !isCurrentHost &&
     Boolean(currentPlayer?.alive);
-  const canModerateNight =
-    canUseGameActions &&
-    gameMode === "automated" &&
-    phase === "night" &&
-    isCurrentHost &&
-    Boolean(nightStep);
   const phaseLabel =
     phase === "game-over"
       ? "Game Over"
-      : phase === "simple-vote-results"
-        ? "Voting Results"
+    : phase === "simple-vote-results"
+      ? "Voting Results"
       : phase === "simple"
         ? "Moderator Tools"
       : phase === "confirmation"
@@ -573,14 +552,6 @@ export default function RoomPage() {
           ? "Night Phase"
           : "Lobby";
   const roleCard = getRoleCard(role);
-  const nightStepText =
-    nightStep === "Detective"
-      ? "Detective wake up"
-      : nightStep === "Mafia"
-        ? "Mafia wake up"
-        : nightStep === "Doctor"
-          ? "Doctor wake up"
-          : "Night is resolving";
 
   function handleStartGame() {
     console.log("start-game clicked", {
@@ -601,14 +572,6 @@ export default function RoomPage() {
     }
 
     socketRef.current.emit("start-game", {
-      roomCode: session.roomCode,
-    });
-  }
-
-  function handleSetGameMode(nextGameMode: GameMode) {
-    setError("");
-    socketRef.current.emit("set-game-mode", {
-      gameMode: nextGameMode,
       roomCode: session.roomCode,
     });
   }
@@ -726,28 +689,20 @@ export default function RoomPage() {
     handleCancelGame();
   }
 
-  function handleModeratorNightAction(targetPlayerId: string) {
-    setNightSelectedTarget(targetPlayerId);
-    setError("");
-    socketRef.current.emit("moderator-night-action", {
-      roomCode: session.roomCode,
-      targetPlayerId,
-    });
-  }
-
-  function handleMoveToNight() {
-    setError("");
-    socketRef.current.emit("move-to-night", {
-      roomCode: session.roomCode,
-    });
-  }
-
   function handleModeratorKillPlayer(targetPlayerId: string) {
     setError("");
     socketRef.current.emit("moderator-kill-player", {
       roomCode: session.roomCode,
       targetPlayerId,
     });
+  }
+
+  function handleToggleModeratorTimer() {
+    if (!isModeratorTimerRunning) {
+      setModeratorTimerSeconds(0);
+    }
+
+    setIsModeratorTimerRunning((running) => !running);
   }
 
   function handleChangeColor(color: string) {
@@ -847,6 +802,7 @@ export default function RoomPage() {
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-5 py-10 text-white">
+      <RoleImagePreloader />
       <section className="w-full max-w-sm text-center">
         <p className="text-sm font-medium uppercase tracking-[0.35em] text-red-300">
           Room Code
@@ -980,27 +936,7 @@ export default function RoomPage() {
 
             {isCurrentHost ? (
               <div className="mt-6 border-t border-zinc-800 pt-6">
-                <p className="text-sm text-zinc-400">Game mode</p>
-                <div className="mt-3 grid grid-cols-2 gap-3">
-                  {(["simple", "automated"] as GameMode[]).map((mode) => (
-                    <button
-                      key={mode}
-                      onClick={() => handleSetGameMode(mode)}
-                      className={`min-h-12 rounded-xl border px-3 text-sm font-bold capitalize transition ${
-                        gameMode === mode
-                          ? "border-emerald-400 bg-emerald-500/10 text-emerald-100"
-                          : "border-zinc-700 bg-zinc-950 text-zinc-200 hover:border-zinc-500"
-                      }`}
-                      type="button"
-                    >
-                      {mode === "simple" ? "Simple" : "Automated"}
-                    </button>
-                  ))}
-                </div>
-
-                {gameMode === "simple" ? (
-                  <>
-                    <p className="mt-6 text-sm text-zinc-400">Add roles</p>
+                <p className="text-sm text-zinc-400">Add roles</p>
                     <div className="mt-3 grid grid-cols-2 gap-3">
                       {roleOptions.map((option) => {
                         const optionCard = getRoleCard(option);
@@ -1066,8 +1002,6 @@ export default function RoomPage() {
                         )}
                       </div>
                     </div>
-                  </>
-                ) : null}
               </div>
             ) : null}
           </div>
@@ -1107,6 +1041,29 @@ export default function RoomPage() {
                   {roleCard.winCondition}
                 </p>
               </div>
+            </div>
+          </div>
+        ) : null}
+
+        {gameStarted && isCurrentHost ? (
+          <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
+            <h2 className="text-xl font-bold">Moderator Timer</h2>
+            <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-5 text-center">
+              <p className="text-5xl font-black tabular-nums text-emerald-200">
+                {Math.floor(moderatorTimerSeconds / 60)}:
+                {String(moderatorTimerSeconds % 60).padStart(2, "0")}
+              </p>
+              <button
+                onClick={handleToggleModeratorTimer}
+                className={`mt-4 min-h-14 w-full rounded-xl px-4 text-base font-bold transition active:scale-[0.98] ${
+                  isModeratorTimerRunning
+                    ? "bg-red-500 text-white hover:bg-red-400"
+                    : "bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
+                }`}
+                type="button"
+              >
+                {isModeratorTimerRunning ? "Stop Timer" : "Start Timer"}
+              </button>
             </div>
           </div>
         ) : null}
@@ -1372,7 +1329,8 @@ export default function RoomPage() {
 
         {gameStarted &&
         (revealVoteCounts ||
-          (gameMode === "simple" && phase === "simple-vote-results")) ? (
+          phase === "simple-vote-results" ||
+          (isCurrentHost && ["defense", "confirmation"].includes(phase))) ? (
           <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
             <h2 className="text-xl font-bold">Vote Results</h2>
             {voteTargets.length > 0 ? (
@@ -1396,94 +1354,22 @@ export default function RoomPage() {
           </div>
         ) : null}
 
-        {canUseGameActions && phase === "night" ? (
-          <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
-            <h2 className="text-xl font-bold">Night Action</h2>
-
-            {isCurrentHost ? (
-              <>
-                <p className="mt-1 text-lg font-bold text-zinc-100">
-                  {nightStepText}
-                </p>
-                <p className="mt-1 text-sm text-zinc-400">
-                  Pick the target after checking with the role in real life.
-                </p>
-
-                {canModerateNight ? (
-                  <div className="mt-4 flex flex-col gap-3">
-                    {alivePlayers.map((player) => {
-                      const isSelected = nightSelectedTarget === player.id;
-
-                      return (
-                        <button
-                          key={player.id}
-                          onClick={() => handleModeratorNightAction(player.id)}
-                          className={`flex min-h-14 items-center justify-between rounded-xl border px-4 text-left transition ${
-                            isSelected
-                              ? "border-red-400 bg-red-500/10"
-                              : "border-zinc-800 bg-zinc-950 hover:border-zinc-600"
-                          }`}
-                        >
-                          {renderPlayerName(player)}
-                          <span className="text-sm font-bold text-red-200">
-                            {isSelected ? "Submitted" : "Pick"}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : null}
-              </>
-            ) : null}
-
-            {!isCurrentHost && !currentPlayer?.alive ? (
-              <p className="mt-1 text-sm text-zinc-400">
-                Dead players wait during the night.
-              </p>
-            ) : null}
-
-            {!isCurrentHost && currentPlayer?.alive ? (
-              <p className="mt-1 text-sm text-zinc-400">
-                Sleeping. Waiting for the moderator...
-              </p>
-            ) : null}
-
-            {!isCurrentHost && detectiveResult ? (
-              <p className="mt-4 rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm font-bold text-zinc-100">
-                {detectiveResult}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-
         {!gameStarted && isCurrentHost ? (
           <>
             <button
               onClick={handleStartGame}
-              disabled={
-                gameMode === "simple"
-                  ? !canStartSimpleGame
-                  : !canStartAutomatedGame
-              }
+              disabled={!canStartGame}
               className="mt-8 min-h-16 w-full rounded-2xl bg-red-500 px-6 text-lg font-bold text-white shadow-lg shadow-red-950/40 transition hover:bg-red-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400 active:scale-[0.98]"
             >
               Start Game
             </button>
-            {gameMode === "simple" ? (
-              <p className="mt-3 text-sm font-medium text-zinc-400">
-                {roleCountMatchesPlayers
-                  ? allGamePlayersReady
-                    ? "Ready to start"
-                    : "Waiting for every player to press ready"
-                  : "Add one role for each player"}
-              </p>
-            ) : (
-              <p className="mt-3 text-sm font-medium text-zinc-400">
-                {allGamePlayersReady
+            <p className="mt-3 text-sm font-medium text-zinc-400">
+              {roleCountMatchesPlayers
+                ? allGamePlayersReady
                   ? "Ready to start"
-                  : "Waiting for every player to press ready"}
-              </p>
-            )}
+                  : "Waiting for every player to press ready"
+                : "Add one role for each player"}
+            </p>
           </>
         ) : null}
 
@@ -1518,7 +1404,7 @@ export default function RoomPage() {
 
         {gameStarted && isCurrentHost ? (
           <div className="mt-8 flex flex-col gap-3">
-            {!gameOver && gameMode === "simple" && phase === "simple" ? (
+            {!gameOver && phase === "simple" ? (
               <button
                 onClick={handleOpenVoting}
                 className="min-h-16 w-full rounded-2xl border border-zinc-700 bg-zinc-900 px-6 text-lg font-bold text-zinc-100 transition hover:border-zinc-500 hover:bg-zinc-800 active:scale-[0.98]"
@@ -1543,16 +1429,7 @@ export default function RoomPage() {
                 </p>
               </>
             ) : null}
-            {!gameOver && phase === "day-results" ? (
-              <button
-                onClick={handleMoveToNight}
-                className="min-h-16 w-full rounded-2xl border border-zinc-700 bg-zinc-900 px-6 text-lg font-bold text-zinc-100 transition hover:border-zinc-500 hover:bg-zinc-800 active:scale-[0.98]"
-              >
-                Move to Night
-              </button>
-            ) : null}
             {!gameOver &&
-            gameMode === "simple" &&
             phase === "simple-vote-results" ? (
               <>
                 <button

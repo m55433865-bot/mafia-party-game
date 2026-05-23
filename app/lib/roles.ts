@@ -107,3 +107,5 @@ export function getRoleCard(role: string): RoleCard {
     winCondition: "Eliminate all Mafia.",
   };
 }
+
+export const roleCards = roleNames.map((roleName) => getRoleCard(roleName));
