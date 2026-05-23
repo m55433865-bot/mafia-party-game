@@ -8,7 +8,11 @@ import {
   isMafiaProfileComplete,
 } from "./lib/mafiaProfile";
 import { RoleImagePreloader } from "./components/RoleImagePreloader";
-import { getStablePlayerId, socket } from "./lib/socket";
+import {
+  connectSocketWithTimeout,
+  getStablePlayerId,
+  socket,
+} from "./lib/socket";
 import { supabase } from "./lib/supabase";
 
 type Player = {
@@ -30,6 +34,24 @@ export default function Home() {
   const [error, setError] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+
+  function enterRoom({
+    avatarUrl,
+    isHost,
+    playerName,
+    roomCode,
+  }: {
+    avatarUrl: string;
+    isHost: boolean;
+    playerName: string;
+    roomCode: string;
+  }) {
+    sessionStorage.setItem("playerName", playerName);
+    sessionStorage.setItem("roomCode", roomCode);
+    sessionStorage.setItem("isHost", String(isHost));
+    sessionStorage.setItem("avatarUrl", avatarUrl);
+    router.push(`/room/${roomCode}`);
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -113,23 +135,17 @@ export default function Home() {
     };
   }, [profile?.avatar_url, router]);
 
-  function connectSocket() {
-    if (!socket.connected) {
-      socket.connect();
-    }
-  }
-
-  function resetAndConnect() {
+  async function resetAndConnect() {
     setError("");
     setIsLoading(true);
-    connectSocket();
+    await connectSocketWithTimeout();
   }
 
   function getPlayerName() {
     return profile?.display_name?.trim() ?? "";
   }
 
-  function handleCreateRoom() {
+  async function handleCreateRoom() {
     const playerName = getPlayerName();
 
     if (!playerName) {
@@ -137,15 +153,56 @@ export default function Home() {
       return;
     }
 
-    resetAndConnect();
-    socket.emit("create-room", {
-      avatarUrl: profile?.avatar_url ?? "",
-      playerId: getStablePlayerId(),
-      playerName,
-    });
+    try {
+      const startedAt = performance.now();
+      await resetAndConnect();
+      socket.timeout(8000).emit(
+        "create-room",
+        {
+          avatarUrl: profile?.avatar_url ?? "",
+          playerId: getStablePlayerId(),
+          playerName,
+        },
+        (
+          error: Error | null,
+          response?: {
+            error?: string;
+            isHost?: boolean;
+            ok: boolean;
+            roomCode?: string;
+          },
+        ) => {
+          console.log("create-room response", {
+            elapsedMs: Math.round(performance.now() - startedAt),
+            error: error?.message,
+            ok: response?.ok,
+          });
+
+          if (error || response?.error) {
+            setError(response?.error ?? "Could not create the room.");
+            setIsLoading(false);
+            return;
+          }
+
+          if (response?.ok && response.roomCode) {
+            enterRoom({
+              avatarUrl: profile?.avatar_url ?? "",
+              isHost: response.isHost ?? true,
+              playerName,
+              roomCode: response.roomCode,
+            });
+          }
+        },
+      );
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Could not connect to the game server.",
+      );
+      setIsLoading(false);
+    }
   }
 
-  function handleJoinRoom() {
+  async function handleJoinRoom() {
     const playerName = getPlayerName();
     const nextRoomCode = roomCode.trim().toUpperCase();
 
@@ -159,13 +216,54 @@ export default function Home() {
       return;
     }
 
-    resetAndConnect();
-    socket.emit("join-room", {
-      avatarUrl: profile?.avatar_url ?? "",
-      playerId: getStablePlayerId(),
-      playerName,
-      roomCode: nextRoomCode,
-    });
+    try {
+      const startedAt = performance.now();
+      await resetAndConnect();
+      socket.timeout(8000).emit(
+        "join-room",
+        {
+          avatarUrl: profile?.avatar_url ?? "",
+          playerId: getStablePlayerId(),
+          playerName,
+          roomCode: nextRoomCode,
+        },
+        (
+          error: Error | null,
+          response?: {
+            error?: string;
+            isHost?: boolean;
+            ok: boolean;
+            roomCode?: string;
+          },
+        ) => {
+          console.log("join-room response", {
+            elapsedMs: Math.round(performance.now() - startedAt),
+            error: error?.message,
+            ok: response?.ok,
+          });
+
+          if (error || response?.error) {
+            setError(response?.error ?? "Could not join the room.");
+            setIsLoading(false);
+            return;
+          }
+
+          if (response?.ok && response.roomCode) {
+            enterRoom({
+              avatarUrl: profile?.avatar_url ?? "",
+              isHost: response.isHost ?? false,
+              playerName,
+              roomCode: response.roomCode,
+            });
+          }
+        },
+      );
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Could not connect to the game server.",
+      );
+      setIsLoading(false);
+    }
   }
 
   async function handleLogout() {

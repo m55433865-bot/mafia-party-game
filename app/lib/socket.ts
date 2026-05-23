@@ -43,10 +43,49 @@ export const socket = io(socketUrl, {
   reconnectionDelayMax: 5000,
   randomizationFactor: 0.5,
   timeout: 10000,
-  transports: ["websocket", "polling"],
+  transports: ["polling", "websocket"],
   tryAllTransports: true,
   upgrade: true,
 });
+
+export function connectSocketWithTimeout(timeoutMs = 10000) {
+  if (socket.connected) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const startedAt = performance.now();
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("Socket connection timed out."));
+    }, timeoutMs);
+
+    function cleanup() {
+      window.clearTimeout(timeout);
+      socket.off("connect", handleConnect);
+      socket.off("connect_error", handleConnectError);
+    }
+
+    function handleConnect() {
+      cleanup();
+      console.log("Socket.io connect ready", {
+        elapsedMs: Math.round(performance.now() - startedAt),
+        id: socket.id,
+        playerId: getStablePlayerId(),
+      });
+      resolve();
+    }
+
+    function handleConnectError(error: Error) {
+      cleanup();
+      reject(error);
+    }
+
+    socket.once("connect", handleConnect);
+    socket.once("connect_error", handleConnectError);
+    socket.connect();
+  });
+}
 
 if (typeof window !== "undefined") {
   let isUpgradeLoggerAttached = false;

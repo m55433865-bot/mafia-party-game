@@ -678,13 +678,16 @@ app.prepare().then(() => {
     }
 
     // Host creates a room on the server so the code is real before navigation.
-    socket.on("create-room", ({ avatarUrl, playerId, playerName }) => {
+    socket.on("create-room", ({ avatarUrl, playerId, playerName }, done) => {
+      const createStartedAt = Date.now();
       const cleanAvatarUrl = String(avatarUrl ?? "").trim();
       const cleanPlayerId = String(playerId ?? "").trim() || socket.id;
       const cleanPlayerName = String(playerName ?? "").trim();
 
       if (!cleanPlayerName) {
-        socket.emit("error-message", "Enter your name first.");
+        const error = "Enter your name first.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
@@ -734,7 +737,9 @@ app.prepare().then(() => {
       };
 
       if (!player.color || (!player.avatarUrl && !player.icon)) {
-        socket.emit("error-message", "Room is full.");
+        const error = "Room is full.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         rooms.delete(roomCode);
         return;
       }
@@ -744,6 +749,7 @@ app.prepare().then(() => {
       socket.data.roomCode = roomCode;
 
       console.log("room created", {
+        elapsedMs: Date.now() - createStartedAt,
         roomCode,
         hostId: cleanPlayerId,
         playerName: cleanPlayerName,
@@ -751,6 +757,7 @@ app.prepare().then(() => {
 
       socket.join(roomCode);
       emitRoomUpdated(io, roomCode, room);
+      done?.({ isHost: true, ok: true, roomCode });
     });
 
     // Players can join only rooms already created in server memory.
@@ -760,7 +767,7 @@ app.prepare().then(() => {
       playerName,
       restoreRequestedAt,
       roomCode,
-    }) => {
+    }, done) => {
       const restoreStartedAt = Date.now();
       const cleanAvatarUrl = String(avatarUrl ?? "").trim();
       const cleanPlayerId = String(playerId ?? "").trim() || socket.id;
@@ -770,12 +777,16 @@ app.prepare().then(() => {
       const room = rooms.get(cleanRoomCode);
 
       if (!cleanPlayerName || !cleanRoomCode) {
-        socket.emit("error-message", "Enter your name and room code.");
+        const error = "Enter your name and room code.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
       if (!room) {
-        socket.emit("error-message", "Room does not exist.");
+        const error = "Room does not exist.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
@@ -814,11 +825,19 @@ app.prepare().then(() => {
           phase: room.phase,
         });
         emitRoomUpdated(io, cleanRoomCode, room);
+        done?.({
+          isHost: existingPlayer.isHost,
+          ok: true,
+          restored: true,
+          roomCode: cleanRoomCode,
+        });
         return;
       }
 
       if (room.gameStarted) {
-        socket.emit("error-message", "Game already started.");
+        const error = "Game already started.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
@@ -837,7 +856,9 @@ app.prepare().then(() => {
       };
 
       if (!player.color || (!player.avatarUrl && !player.icon)) {
-        socket.emit("error-message", "Room is full.");
+        const error = "Room is full.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
@@ -1044,6 +1065,12 @@ app.prepare().then(() => {
 
       resetRoomToLobby(room);
       emitRoomUpdated(io, cleanRoomCode, room);
+      done?.({
+        isHost: player.isHost,
+        ok: true,
+        restored: false,
+        roomCode: cleanRoomCode,
+      });
     });
 
     socket.on("set-cupid-lovers", ({ roomCode, loverIds }) => {
