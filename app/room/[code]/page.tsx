@@ -1119,6 +1119,50 @@ export default function RoomPage() {
           </p>
         ) : null}
 
+        {isCurrentHost && !gameStarted ? (
+          <div className="mt-5 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-5 text-left">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-emerald-100">
+                  Test Bots
+                </h2>
+                <p className="mt-1 text-sm text-emerald-100/70">
+                  Add fake players for testing.
+                </p>
+              </div>
+              <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-sm font-bold text-emerald-100">
+                Host
+              </span>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-3">
+              {[1, 3, 7].map((count) => (
+                <button
+                  key={count}
+                  onClick={() => handleAddBots(count)}
+                  className="min-h-14 rounded-xl bg-emerald-400 px-3 text-base font-black text-zinc-950 transition hover:bg-emerald-300 active:scale-[0.98]"
+                  type="button"
+                >
+                  +{count}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleClearBots}
+              className="mt-3 min-h-12 w-full rounded-xl border border-emerald-400/30 bg-zinc-950 px-4 text-sm font-bold text-emerald-100 transition hover:border-emerald-300 active:scale-[0.98]"
+              type="button"
+            >
+              Clear Bots
+            </button>
+          </div>
+        ) : null}
+
+        {isCurrentHost && gameStarted ? (
+          <p className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm font-medium text-zinc-400">
+            Bots can be added before the game starts. Return to lobby to change
+            test players.
+          </p>
+        ) : null}
+
         {gameStarted ? (
           <div
             className={`mt-10 rounded-2xl border p-5 ${
@@ -1243,28 +1287,6 @@ export default function RoomPage() {
 
             {isCurrentHost ? (
               <div className="mt-6 border-t border-zinc-800 pt-6">
-                <p className="text-sm text-zinc-400">Test bots</p>
-                <div className="mt-3 grid grid-cols-3 gap-3">
-                  {[1, 3, 7].map((count) => (
-                    <button
-                      key={count}
-                      onClick={() => handleAddBots(count)}
-                      className="min-h-12 rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-sm font-bold text-zinc-100 transition hover:border-zinc-500 active:scale-[0.98]"
-                      type="button"
-                    >
-                      +{count}
-                    </button>
-                  ))}
-                </div>
-                <button
-                  onClick={handleClearBots}
-                  className="mt-3 min-h-12 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 text-sm font-bold text-zinc-100 transition hover:border-red-400 active:scale-[0.98]"
-                  type="button"
-                >
-                  Clear Bots
-                </button>
-
-                <div className="mt-6 border-t border-zinc-800 pt-6">
                   <p className="text-sm text-zinc-400">Add roles</p>
                     <div className="mt-3 grid grid-cols-2 gap-3">
                       {roleOptions.map((option) => {
@@ -1331,7 +1353,6 @@ export default function RoomPage() {
                         )}
                       </div>
                     </div>
-                </div>
               </div>
             ) : null}
           </div>

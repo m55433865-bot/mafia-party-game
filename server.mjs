@@ -290,6 +290,7 @@ function formatRoom(roomCode, room, viewerId = "") {
     disconnectedAt: player.disconnectedAt,
     icon: player.icon,
     id: player.id,
+    isBot: Boolean(player.isBot),
     isHost: player.isHost,
     name: player.name,
   }));
