@@ -25,6 +25,7 @@ type Player = {
   disconnectedAt: number;
   icon: string;
   id: string;
+  isBot?: boolean;
   name: string;
   isHost: boolean;
 };
@@ -133,6 +134,7 @@ export default function RoomPage() {
   const [recentlyDeadIds, setRecentlyDeadIds] = useState<string[]>([]);
   const [revealVoteCounts, setRevealVoteCounts] = useState(false);
   const [roleCardVisible, setRoleCardVisible] = useState(true);
+  const [selectedBotVoterId, setSelectedBotVoterId] = useState("");
   const [roleOptions, setRoleOptions] = useState<string[]>([
     "Detective",
     "Doctor",
@@ -657,6 +659,9 @@ export default function RoomPage() {
   const isCurrentHost = currentPlayer?.isHost ?? session.isHost;
   const alivePlayers = currentPlayers.filter((player) => player.alive);
   const gamePlayers = currentPlayers.filter((player) => !player.isHost);
+  const aliveBotPlayers = gamePlayers.filter(
+    (player) => player.isBot && player.alive,
+  );
   const pendingEliminationPlayer = getPlayer(pendingEliminationId);
   const isConfirmationVoter = confirmationVoterIds.includes(socketId);
   const hasSubmittedConfirmation = confirmationResponses.includes(socketId);
@@ -804,11 +809,41 @@ export default function RoomPage() {
     });
   }
 
+  function handleAddBots(count: number) {
+    setError("");
+    socketRef.current.emit("add-bots", {
+      count,
+      roomCode: session.roomCode,
+    });
+  }
+
+  function handleClearBots() {
+    setError("");
+    setSelectedBotVoterId("");
+    socketRef.current.emit("clear-bots", {
+      roomCode: session.roomCode,
+    });
+  }
+
   function handleVote(targetPlayerId: string) {
     setSelectedVote(targetPlayerId);
     setVoteSubmitted(true);
     setError("");
     socketRef.current.emit("vote-player", {
+      roomCode: session.roomCode,
+      targetPlayerId,
+    });
+  }
+
+  function handleBotVote(targetPlayerId: string) {
+    if (!selectedBotVoterId) {
+      setError("Choose a bot voter first.");
+      return;
+    }
+
+    setError("");
+    socketRef.current.emit("moderator-bot-vote", {
+      botPlayerId: selectedBotVoterId,
       roomCode: session.roomCode,
       targetPlayerId,
     });
@@ -1208,7 +1243,29 @@ export default function RoomPage() {
 
             {isCurrentHost ? (
               <div className="mt-6 border-t border-zinc-800 pt-6">
-                <p className="text-sm text-zinc-400">Add roles</p>
+                <p className="text-sm text-zinc-400">Test bots</p>
+                <div className="mt-3 grid grid-cols-3 gap-3">
+                  {[1, 3, 7].map((count) => (
+                    <button
+                      key={count}
+                      onClick={() => handleAddBots(count)}
+                      className="min-h-12 rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-sm font-bold text-zinc-100 transition hover:border-zinc-500 active:scale-[0.98]"
+                      type="button"
+                    >
+                      +{count}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={handleClearBots}
+                  className="mt-3 min-h-12 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 text-sm font-bold text-zinc-100 transition hover:border-red-400 active:scale-[0.98]"
+                  type="button"
+                >
+                  Clear Bots
+                </button>
+
+                <div className="mt-6 border-t border-zinc-800 pt-6">
+                  <p className="text-sm text-zinc-400">Add roles</p>
                     <div className="mt-3 grid grid-cols-2 gap-3">
                       {roleOptions.map((option) => {
                         const optionCard = getRoleCard(option);
@@ -1274,6 +1331,7 @@ export default function RoomPage() {
                         )}
                       </div>
                     </div>
+                </div>
               </div>
             ) : null}
           </div>
@@ -1491,7 +1549,7 @@ export default function RoomPage() {
                     </span>
                   ) : null}
                   <span className="rounded-full bg-red-500/10 px-3 py-1 text-sm font-medium text-red-200">
-                    {player.isHost ? "Host" : "Player"}
+                    {player.isHost ? "Host" : player.isBot ? "Bot" : "Player"}
                   </span>
                   {gameStarted && isCurrentHost && !player.isHost && player.alive ? (
                     <button
@@ -1566,6 +1624,59 @@ export default function RoomPage() {
                     </button>
                   );
                 })}
+              </div>
+            ) : null}
+
+            {isCurrentHost && aliveBotPlayers.length > 0 ? (
+              <div className="mt-5 border-t border-zinc-800 pt-5">
+                <p className="text-sm font-bold text-zinc-200">Bot voting</p>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Pick a bot, then choose who that bot votes for.
+                </p>
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  {aliveBotPlayers.map((botPlayer) => (
+                    <button
+                      key={botPlayer.id}
+                      onClick={() => setSelectedBotVoterId(botPlayer.id)}
+                      className={`min-h-12 rounded-xl border px-3 text-sm font-bold transition active:scale-[0.98] ${
+                        selectedBotVoterId === botPlayer.id
+                          ? "border-emerald-400 bg-emerald-500/10 text-emerald-100"
+                          : "border-zinc-700 bg-zinc-950 text-zinc-100 hover:border-zinc-500"
+                      }`}
+                      type="button"
+                    >
+                      {botPlayer.name}
+                      {votingStatus[botPlayer.id] ? " (Voted)" : ""}
+                    </button>
+                  ))}
+                </div>
+                {selectedBotVoterId ? (
+                  <div className="mt-4 flex flex-col gap-3">
+                    {alivePlayers
+                      .filter((player) => player.id !== selectedBotVoterId)
+                      .map((player) => (
+                        <button
+                          key={player.id}
+                          onClick={() => handleBotVote(player.id)}
+                          className={`flex min-h-14 items-center justify-between rounded-xl border px-4 text-left transition active:scale-[0.98] ${
+                            voteTargets.some(
+                              (vote) =>
+                                vote.voterId === selectedBotVoterId &&
+                                vote.targetPlayerId === player.id,
+                            )
+                              ? "border-red-400 bg-red-500/10"
+                              : "border-zinc-800 bg-zinc-950 hover:border-zinc-600"
+                          }`}
+                          type="button"
+                        >
+                          {renderPlayerName(player)}
+                          <span className="text-sm font-bold text-red-200">
+                            Vote
+                          </span>
+                        </button>
+                      ))}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>

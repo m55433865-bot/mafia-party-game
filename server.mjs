@@ -128,6 +128,30 @@ function getRandomAvailableIcon(room) {
   return availableIcons[Math.floor(Math.random() * availableIcons.length)];
 }
 
+function createBotPlayer(room, botNumber) {
+  const color = getRandomAvailableColor(room);
+  const icon = getRandomAvailableIcon(room);
+
+  if (!color || !icon) {
+    return null;
+  }
+
+  return {
+    alive: true,
+    avatarUrl: "",
+    color,
+    connected: true,
+    disconnectedAt: 0,
+    icon,
+    id: `bot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    isBot: true,
+    isHost: false,
+    name: `Bot ${botNumber}`,
+    reconnectTimeout: null,
+    socketId: "",
+  };
+}
+
 function createEmptyRoom(hostId) {
   return {
     confirmationResponses: new Set(),
@@ -1206,6 +1230,87 @@ app.prepare().then(() => {
       emitRoomUpdated(io, cleanRoomCode, room);
     });
 
+    socket.on("add-bots", ({ roomCode, count }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const cleanCount = Math.max(1, Math.min(10, Number(count) || 1));
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room) {
+        socket.emit("error-message", "Room does not exist.");
+        return;
+      }
+
+      if (room.hostId !== getSocketPlayerId(socket)) {
+        socket.emit("error-message", "Only the moderator can add bots.");
+        return;
+      }
+
+      if (room.gameStarted) {
+        socket.emit("error-message", "Bots can only be added in lobby.");
+        return;
+      }
+
+      const existingBotCount = Array.from(room.players.values()).filter(
+        (player) => player.isBot,
+      ).length;
+      let addedCount = 0;
+
+      for (let index = 0; index < cleanCount; index += 1) {
+        const bot = createBotPlayer(room, existingBotCount + addedCount + 1);
+
+        if (!bot) {
+          break;
+        }
+
+        room.players.set(bot.id, bot);
+        room.readyPlayerIds.add(bot.id);
+        addedCount += 1;
+      }
+
+      if (addedCount === 0) {
+        socket.emit("error-message", "No more bot slots are available.");
+        return;
+      }
+
+      console.log("bots added", {
+        count: addedCount,
+        roomCode: cleanRoomCode,
+      });
+      emitRoomUpdated(io, cleanRoomCode, room);
+    });
+
+    socket.on("clear-bots", ({ roomCode }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room) {
+        socket.emit("error-message", "Room does not exist.");
+        return;
+      }
+
+      if (room.hostId !== getSocketPlayerId(socket)) {
+        socket.emit("error-message", "Only the moderator can clear bots.");
+        return;
+      }
+
+      if (room.gameStarted) {
+        socket.emit("error-message", "Bots can only be cleared in lobby.");
+        return;
+      }
+
+      for (const player of room.players.values()) {
+        if (player.isBot) {
+          room.players.delete(player.id);
+          room.readyPlayerIds.delete(player.id);
+        }
+      }
+
+      console.log("bots cleared", {
+        roomCode: cleanRoomCode,
+      });
+      emitRoomUpdated(io, cleanRoomCode, room);
+    });
+
     socket.on("add-selected-role", ({ roomCode, role }) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const cleanRole = String(role ?? "").trim();
@@ -1484,6 +1589,59 @@ app.prepare().then(() => {
       }
 
       room.votes.set(voter.id, targetPlayer.id);
+      emitRoomUpdated(io, cleanRoomCode, room);
+    });
+
+    socket.on("moderator-bot-vote", ({ roomCode, botPlayerId, targetPlayerId }) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const cleanBotPlayerId = String(botPlayerId ?? "").trim();
+      const cleanTargetPlayerId = String(targetPlayerId ?? "").trim();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!room || !room.gameStarted || room.gameOver || room.phase !== "day") {
+        socket.emit("error-message", "Voting is not active.");
+        return;
+      }
+
+      if (room.hostId !== getSocketPlayerId(socket)) {
+        socket.emit("error-message", "Only the moderator can vote for bots.");
+        return;
+      }
+
+      const botPlayer = room.players.get(cleanBotPlayerId);
+      const targetPlayer = room.players.get(cleanTargetPlayerId);
+
+      if (
+        !botPlayer ||
+        !botPlayer.isBot ||
+        !targetPlayer ||
+        targetPlayer.isHost
+      ) {
+        socket.emit("error-message", "Player not found.");
+        return;
+      }
+
+      if (!botPlayer.alive) {
+        socket.emit("error-message", "Dead bots cannot vote.");
+        return;
+      }
+
+      if (!targetPlayer.alive) {
+        socket.emit("error-message", "Bots can only vote for alive players.");
+        return;
+      }
+
+      if (botPlayer.id === targetPlayer.id) {
+        socket.emit("error-message", "A bot cannot vote for itself.");
+        return;
+      }
+
+      room.votes.set(botPlayer.id, targetPlayer.id);
+      console.log("bot vote submitted", {
+        botPlayerId: botPlayer.id,
+        roomCode: cleanRoomCode,
+        targetPlayerId: targetPlayer.id,
+      });
       emitRoomUpdated(io, cleanRoomCode, room);
     });
 
