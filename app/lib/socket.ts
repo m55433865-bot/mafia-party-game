@@ -36,6 +36,7 @@ export const socket = io(socketUrl, {
   closeOnBeforeunload: false,
   forceNew: false,
   multiplex: true,
+  path: "/socket.io/",
   rememberUpgrade: true,
   reconnection: true,
   reconnectionAttempts: Infinity,
@@ -43,7 +44,7 @@ export const socket = io(socketUrl, {
   reconnectionDelayMax: 5000,
   randomizationFactor: 0.5,
   timeout: 10000,
-  transports: ["polling", "websocket"],
+  transports: ["websocket", "polling"],
   tryAllTransports: true,
   upgrade: true,
 });
@@ -86,6 +87,8 @@ if (typeof window !== "undefined") {
   socket.on("connect", () => {
     console.log("Socket.io connected", {
       id: socket.id,
+      path: "/socket.io/",
+      playerId: getStablePlayerId(),
       transport: socket.io.engine.transport.name,
       url: socketUrl,
     });
@@ -98,13 +101,27 @@ if (typeof window !== "undefined") {
           url: socketUrl,
         });
       });
+
+      socket.io.engine.on("packet", (packet: { type: string }) => {
+        if (packet.type === "ping" || packet.type === "pong") {
+          return;
+        }
+
+        console.log("Socket.io engine packet", {
+          type: packet.type,
+          transport: socket.io.engine.transport.name,
+          url: socketUrl,
+        });
+      });
     }
   });
 
   socket.on("connect_error", (error) => {
     console.log("Socket.io connect_error", {
       message: error.message,
+      path: "/socket.io/",
       playerId: getStablePlayerId(),
+      transport: socket.io.engine?.transport?.name,
       url: socketUrl,
     });
   });
@@ -112,7 +129,9 @@ if (typeof window !== "undefined") {
   socket.io.on("reconnect_attempt", (attempt) => {
     console.log("Socket.io reconnect attempt", {
       attempt,
+      path: "/socket.io/",
       playerId: getStablePlayerId(),
+      transport: socket.io.engine?.transport?.name,
       url: socketUrl,
     });
   });
@@ -121,7 +140,9 @@ if (typeof window !== "undefined") {
     console.log("Socket.io reconnect success", {
       attempt,
       id: socket.id,
+      path: "/socket.io/",
       playerId: getStablePlayerId(),
+      transport: socket.io.engine.transport.name,
       url: socketUrl,
     });
   });
@@ -129,7 +150,18 @@ if (typeof window !== "undefined") {
   socket.io.on("reconnect_error", (error) => {
     console.log("Socket.io reconnect failure", {
       message: error.message,
+      path: "/socket.io/",
       playerId: getStablePlayerId(),
+      transport: socket.io.engine?.transport?.name,
+      url: socketUrl,
+    });
+  });
+
+  socket.io.on("reconnect_failed", () => {
+    console.log("Socket.io reconnect failed", {
+      path: "/socket.io/",
+      playerId: getStablePlayerId(),
+      transport: socket.io.engine?.transport?.name,
       url: socketUrl,
     });
   });
@@ -137,8 +169,10 @@ if (typeof window !== "undefined") {
   socket.on("disconnect", (reason) => {
     console.log("Socket.io disconnected", {
       id: socket.id,
+      path: "/socket.io/",
       playerId: getStablePlayerId(),
       reason,
+      transport: socket.io.engine?.transport?.name,
       url: socketUrl,
     });
   });

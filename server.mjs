@@ -6,6 +6,16 @@ const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME ?? (dev ? "localhost" : "0.0.0.0");
 const port = Number(process.env.PORT) || 3000;
 const RECONNECT_GRACE_MS = 2 * 60 * 1000;
+const ALLOWED_SOCKET_ORIGINS = new Set(
+  [
+    "https://mafia.yourteck.com",
+    "https://www.mafia.yourteck.com",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.SOCKET_CORS_ORIGIN,
+  ].filter(Boolean),
+);
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
@@ -371,11 +381,21 @@ function formatRoom(roomCode, room, viewerId = "") {
 }
 
 function emitRoomUpdated(io, roomCode, room) {
+  let sentCount = 0;
+
   for (const player of room.players.values()) {
     if (player.connected && player.socketId) {
       io.to(player.socketId).emit("room-updated", formatRoom(roomCode, room, player.id));
+      sentCount += 1;
     }
   }
+
+  console.log("room-updated emit", {
+    connectedPlayers: sentCount,
+    phase: room.phase,
+    playerCount: room.players.size,
+    roomCode,
+  });
 }
 
 function getVoteDetails(room) {
@@ -484,6 +504,7 @@ function cleanSelectedRoles(roles) {
 
 function emitGameStarted(io, roomCode, room) {
   const publicPlayers = formatRoom(roomCode, room).players;
+  let sentCount = 0;
 
   for (const player of room.players.values()) {
     if (!player.connected || !player.socketId) {
@@ -500,7 +521,14 @@ function emitGameStarted(io, roomCode, room) {
       revealVoteCounts: false,
       nightStep: room.nightStep,
     });
+    sentCount += 1;
   }
+
+  console.log("start-game emit", {
+    connectedPlayers: sentCount,
+    playerCount: room.players.size,
+    roomCode,
+  });
 
   emitRoomUpdated(io, roomCode, room);
 }
@@ -968,12 +996,79 @@ app.prepare().then(() => {
       return;
     }
 
+    if (req.method === "GET" && requestUrl.pathname === "/api/room-state") {
+      const cleanRoomCode = String(requestUrl.searchParams.get("roomCode") ?? "")
+        .trim()
+        .toUpperCase();
+      const cleanPlayerId = String(requestUrl.searchParams.get("playerId") ?? "")
+        .trim();
+      const room = rooms.get(cleanRoomCode);
+
+      if (!cleanRoomCode || !cleanPlayerId) {
+        sendJson(res, 400, {
+          ok: false,
+          error: "Room code and player id are required.",
+        });
+        return;
+      }
+
+      if (!room || !room.players.has(cleanPlayerId)) {
+        sendJson(res, 404, { ok: false, error: "Room does not exist." });
+        return;
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+      });
+      return;
+    }
+
     handle(req, res);
   });
-  io = new Server(httpServer);
+  io = new Server(httpServer, {
+    cors: {
+      origin(origin, callback) {
+        if (!origin || ALLOWED_SOCKET_ORIGINS.has(origin)) {
+          callback(null, true);
+          return;
+        }
+
+        console.log("socket cors rejected", { origin });
+        callback(new Error("Socket origin is not allowed."));
+      },
+    },
+    path: "/socket.io/",
+    transports: ["websocket", "polling"],
+  });
+
+  io.engine.on("connection_error", (error) => {
+    console.log("socket connection_error", {
+      code: error.code,
+      context: error.context,
+      message: error.message,
+      reqUrl: error.req?.url,
+    });
+  });
 
   io.on("connection", (socket) => {
     const authPlayerId = String(socket.handshake.auth?.playerId ?? "").trim();
+
+    console.log("socket new connection", {
+      id: socket.id,
+      origin: socket.handshake.headers.origin,
+      playerId: authPlayerId,
+      reqUrl: socket.request.url,
+      transport: socket.conn.transport.name,
+    });
+
+    socket.conn.on("upgrade", (transport) => {
+      console.log("socket transport upgraded", {
+        id: socket.id,
+        playerId: getSocketPlayerId(socket),
+        transport: transport.name,
+      });
+    });
 
     if (authPlayerId) {
       socket.data.playerId = authPlayerId;
@@ -1077,6 +1172,14 @@ app.prepare().then(() => {
       const cleanRestoreRequestedAt = Number(restoreRequestedAt) || 0;
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
+
+      console.log("join-room received", {
+        playerId: cleanPlayerId,
+        playerName: cleanPlayerName,
+        roomCode: cleanRoomCode,
+        socketId: socket.id,
+        transport: socket.conn.transport.name,
+      });
 
       if (!cleanPlayerName || !cleanRoomCode) {
         const error = "Enter your name and room code.";
@@ -2124,9 +2227,11 @@ app.prepare().then(() => {
     // Disconnect handles closing the tab, refreshing, losing connection, or closing the browser.
     socket.on("disconnect", (reason) => {
       console.log("disconnect received", {
+        origin: socket.handshake.headers.origin,
         socketId: socket.id,
         playerId: getSocketPlayerId(socket),
         reason,
+        transport: socket.conn.transport.name,
       });
 
       markPlayerDisconnectedFromAllRooms(io, socket, rooms, reason);

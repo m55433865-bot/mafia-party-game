@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -170,6 +171,7 @@ export default function RoomPage() {
   const [winner, setWinner] = useState("");
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [isRealtimeReady, setIsRealtimeReady] = useState(false);
+  const [realtimeAttempt, setRealtimeAttempt] = useState(0);
   const [isRoomCodeCopied, setIsRoomCodeCopied] = useState(false);
   const stablePlayerId = useMemo(() => getStablePlayerId(), []);
 
@@ -226,6 +228,99 @@ export default function RoomPage() {
   useEffect(() => {
     selectedRolesRef.current = selectedRoles;
   }, [selectedRoles]);
+
+  const applyRoomUpdate = useCallback((room: RoomUpdate) => {
+    if (room.roomCode !== session.roomCode) {
+      return;
+    }
+
+    const currentPlayer = room.players.find(
+      (player) => player.id === stablePlayerId,
+    );
+
+    if (currentPlayer) {
+      sessionStorage.setItem("isHost", String(currentPlayer.isHost));
+    }
+
+    if (previousAliveRef.current) {
+      const newlyDeadIds = room.players
+        .filter(
+          (player) =>
+            previousAliveRef.current?.[player.id] === true && !player.alive,
+        )
+        .map((player) => player.id);
+
+      if (newlyDeadIds.length > 0) {
+        setRecentlyDeadIds(newlyDeadIds);
+        window.setTimeout(() => setRecentlyDeadIds([]), 1200);
+      }
+    }
+
+    previousAliveRef.current = Object.fromEntries(
+      room.players.map((player) => [player.id, player.alive]),
+    );
+
+    setPlayers(room.players);
+    setAllAlivePlayersVoted(room.allAlivePlayersVoted);
+    setConfirmationResponses(room.confirmationResponses);
+    setConfirmationVoterIds(room.confirmationVoterIds);
+    setCupidLoverIds(room.cupidLoverIds);
+    setDefenseEndsAt(room.defenseEndsAt);
+    setGameOver(room.gameOver);
+    setGameStarted(room.gameStarted);
+    setPhase(room.phase);
+    if (room.ownRole) {
+      setRole(room.ownRole);
+    }
+    setLastEliminatedPlayerId(room.lastEliminatedPlayerId);
+    setNightResultMessage(room.nightResultMessage);
+    setPendingEliminationId(room.pendingEliminationId);
+    setPlayerColors(room.playerColors);
+    setPlayerIcons(room.playerIcons);
+    setPlayerRoles(room.playerRoles);
+    setReadyPlayerIds(room.readyPlayerIds);
+    setRevealVoteCounts(room.revealVoteCounts);
+    setRoleOptions(room.roleOptions);
+    if (!currentPlayer?.isHost || room.gameStarted) {
+      localRoleDeckDirtyRef.current = false;
+      setSelectedRoles(room.selectedRoles);
+    } else if (
+      localRoleDeckDirtyRef.current &&
+      room.selectedRoles.join("|") === selectedRolesRef.current.join("|")
+    ) {
+      localRoleDeckDirtyRef.current = false;
+    } else if (!localRoleDeckDirtyRef.current) {
+      setSelectedRoles(room.selectedRoles);
+    }
+    setVoteTargets(room.voteTargets);
+    setVoteCounts(room.voteCounts);
+    setVotingStatus(room.votingStatus);
+    setWinner(room.winner);
+
+    if (!room.gameStarted || room.revealVoteCounts || !currentPlayer?.alive) {
+      setSelectedVote("");
+      setVoteSubmitted(false);
+    }
+
+    if (
+      room.phase !== "confirmation" ||
+      room.confirmationResponses.includes(stablePlayerId)
+    ) {
+      setSelectedConfirmationTarget("");
+    }
+
+    if (!room.gameStarted) {
+      setIsModeratorTimerRunning(false);
+      setNightResultMessage("");
+      setPendingEliminationId("");
+      setRole("");
+      setRoleCardVisible(true);
+      setModeratorTimerSeconds(0);
+      setWinner("");
+    }
+
+    setError("");
+  }, [session.roomCode, stablePlayerId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -290,98 +385,8 @@ export default function RoomPage() {
     }
 
     function handleRoomUpdated(room: RoomUpdate) {
-      if (room.roomCode !== session.roomCode) {
-        return;
-      }
-
-      const currentPlayer = room.players.find(
-        (player) => player.id === stablePlayerId,
-      );
-
-      if (currentPlayer) {
-        sessionStorage.setItem("isHost", String(currentPlayer.isHost));
-      }
-
-      if (previousAliveRef.current) {
-        const newlyDeadIds = room.players
-          .filter(
-            (player) =>
-              previousAliveRef.current?.[player.id] === true && !player.alive,
-          )
-          .map((player) => player.id);
-
-        if (newlyDeadIds.length > 0) {
-          setRecentlyDeadIds(newlyDeadIds);
-          window.setTimeout(() => setRecentlyDeadIds([]), 1200);
-        }
-      }
-
-      previousAliveRef.current = Object.fromEntries(
-        room.players.map((player) => [player.id, player.alive]),
-      );
-
-      setPlayers(room.players);
+      applyRoomUpdate(room);
       setIsRealtimeReady(true);
-      setAllAlivePlayersVoted(room.allAlivePlayersVoted);
-      setConfirmationResponses(room.confirmationResponses);
-      setConfirmationVoterIds(room.confirmationVoterIds);
-      setCupidLoverIds(room.cupidLoverIds);
-      setDefenseEndsAt(room.defenseEndsAt);
-      setGameOver(room.gameOver);
-      setGameStarted(room.gameStarted);
-      setPhase(room.phase);
-      if (room.ownRole) {
-        setRole(room.ownRole);
-      }
-      setLastEliminatedPlayerId(room.lastEliminatedPlayerId);
-      setNightResultMessage(room.nightResultMessage);
-      setPendingEliminationId(room.pendingEliminationId);
-      setPlayerColors(room.playerColors);
-      setPlayerIcons(room.playerIcons);
-      setPlayerRoles(room.playerRoles);
-      setReadyPlayerIds(room.readyPlayerIds);
-      setRevealVoteCounts(room.revealVoteCounts);
-      setRoleOptions(room.roleOptions);
-      if (!currentPlayer?.isHost || room.gameStarted) {
-        localRoleDeckDirtyRef.current = false;
-        setSelectedRoles(room.selectedRoles);
-      } else if (
-        localRoleDeckDirtyRef.current &&
-        room.selectedRoles.join("|") === selectedRolesRef.current.join("|")
-      ) {
-        localRoleDeckDirtyRef.current = false;
-      } else if (!localRoleDeckDirtyRef.current) {
-        setSelectedRoles(room.selectedRoles);
-      }
-      setVoteTargets(room.voteTargets);
-      setVoteCounts(room.voteCounts);
-      setVotingStatus(room.votingStatus);
-      setWinner(room.winner);
-
-      if (!room.gameStarted || room.revealVoteCounts || !currentPlayer?.alive) {
-        setSelectedVote("");
-        setVoteSubmitted(false);
-      }
-
-      if (room.phase !== "confirmation") {
-        setSelectedConfirmationTarget("");
-      }
-
-      if (room.phase === "day") {
-        setNightResultMessage("");
-      }
-
-      if (!room.gameStarted) {
-        setIsModeratorTimerRunning(false);
-        setNightResultMessage("");
-        setPendingEliminationId("");
-        setRole("");
-        setRoleCardVisible(true);
-        setModeratorTimerSeconds(0);
-        setWinner("");
-      }
-
-      setError("");
     }
 
     function handleErrorMessage(message: string) {
@@ -631,6 +636,61 @@ export default function RoomPage() {
     session.playerName,
     session.roomCode,
     stablePlayerId,
+    realtimeAttempt,
+    applyRoomUpdate,
+  ]);
+
+  useEffect(() => {
+    if (isAuthLoading || !session.playerName || isRealtimeReady) {
+      return;
+    }
+
+    let isMounted = true;
+
+    async function refreshRoomState() {
+      try {
+        const response = await fetch(
+          `/api/room-state?roomCode=${encodeURIComponent(
+            session.roomCode,
+          )}&playerId=${encodeURIComponent(stablePlayerId)}`,
+        );
+        const result = (await response.json()) as {
+          error?: string;
+          ok: boolean;
+          room?: RoomUpdate;
+        };
+
+        if (!isMounted) {
+          return;
+        }
+
+        if (!response.ok || !result.ok || !result.room) {
+          setError(result.error ?? "Could not refresh room state.");
+          return;
+        }
+
+        applyRoomUpdate(result.room);
+      } catch {
+        if (isMounted) {
+          setError("Could not refresh room state.");
+        }
+      }
+    }
+
+    refreshRoomState();
+    const interval = window.setInterval(refreshRoomState, 2500);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(interval);
+    };
+  }, [
+    isAuthLoading,
+    isRealtimeReady,
+    session.playerName,
+    session.roomCode,
+    stablePlayerId,
+    applyRoomUpdate,
   ]);
 
   useEffect(() => {
@@ -884,6 +944,14 @@ export default function RoomPage() {
     } catch {
       setError("Socket is not connected. Try refreshing the room.");
     }
+  }
+
+  function handleRetryRealtime() {
+    setError("");
+    setIsReconnecting(true);
+    setIsRealtimeReady(false);
+    socketRef.current.disconnect();
+    setRealtimeAttempt((attempt) => attempt + 1);
   }
 
   function handleVote(targetPlayerId: string) {
@@ -1949,8 +2017,17 @@ export default function RoomPage() {
             >
               {isRealtimeReady
                 ? "Realtime connected"
-                : "Connecting realtime updates before Start Game"}
+                : "Using fallback refresh while realtime connects"}
             </p>
+            {!isRealtimeReady ? (
+              <button
+                onClick={handleRetryRealtime}
+                className="mt-3 min-h-11 w-full rounded-xl border border-amber-400/40 bg-zinc-950 px-4 text-sm font-bold text-amber-100 transition hover:border-amber-300 active:scale-[0.98]"
+                type="button"
+              >
+                Retry Realtime
+              </button>
+            ) : null}
           </>
         ) : null}
 
