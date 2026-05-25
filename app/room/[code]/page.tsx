@@ -16,7 +16,6 @@ import {
 import { RoleImagePreloader } from "../../components/RoleImagePreloader";
 import { getRoleCard } from "../../lib/roles";
 import {
-  connectSocketWithTimeout,
   getStablePlayerId,
   socket,
 } from "../../lib/socket";
@@ -90,6 +89,12 @@ type SocketAck = {
   error?: string;
   ok: boolean;
   removedCount?: number;
+};
+
+type RoomActionResponse = {
+  error?: string;
+  ok: boolean;
+  room?: RoomUpdate;
 };
 
 let pendingLeaveTimeout: number | null = null;
@@ -770,7 +775,6 @@ export default function RoomPage() {
   const roleCountMatchesPlayers = selectedRoles.length === gamePlayers.length;
   const canStartGame =
     isCurrentHost &&
-    isRealtimeReady &&
     allGamePlayersReady &&
     roleCountMatchesPlayers;
   const currentPlayerReady = readyPlayerIds.includes(socketId);
@@ -822,7 +826,28 @@ export default function RoomPage() {
           : "Lobby";
   const roleCard = getRoleCard(role);
 
-  function handleStartGame() {
+  async function postRoomAction(path: string, payload: Record<string, unknown>) {
+    const response = await fetch(path, {
+      body: JSON.stringify(payload),
+      headers: {
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+    const result = (await response.json()) as RoomActionResponse;
+
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error ?? "Room request failed.");
+    }
+
+    if (result.room) {
+      applyRoomUpdate(result.room);
+    }
+
+    return result;
+  }
+
+  async function handleStartGame() {
     console.log("start-game clicked", {
       connected: socketRef.current.connected,
       roomCode: session.roomCode,
@@ -830,21 +855,15 @@ export default function RoomPage() {
 
     setError("");
 
-    if (!socketRef.current.connected) {
-      socketRef.current.connect();
-      socketRef.current.once("connect", () => {
-        socketRef.current.emit("start-game", {
-          selectedRoles,
-          roomCode: session.roomCode,
-        });
+    try {
+      await postRoomAction("/api/start-game", {
+        playerId: socketId,
+        roomCode: session.roomCode,
+        selectedRoles,
       });
-      return;
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not start game.");
     }
-
-    socketRef.current.emit("start-game", {
-      selectedRoles,
-      roomCode: session.roomCode,
-    });
   }
 
   function handleAddSelectedRole(nextRole: string) {
@@ -894,27 +913,13 @@ export default function RoomPage() {
     setError("");
 
     try {
-      await connectSocketWithTimeout();
-      socketRef.current.timeout(5000).emit(
-        "add-bots",
-        {
-          count,
-          playerId: socketId,
-          roomCode: session.roomCode,
-        },
-        (timeoutError: Error | null, response?: SocketAck) => {
-          if (timeoutError) {
-            setError("Bot add request timed out. Restart or redeploy the server.");
-            return;
-          }
-
-          if (!response?.ok) {
-            setError(response?.error ?? "Could not add bots.");
-          }
-        },
-      );
-    } catch {
-      setError("Socket is not connected. Try refreshing the room.");
+      await postRoomAction("/api/add-bots", {
+        count,
+        playerId: socketId,
+        roomCode: session.roomCode,
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not add bots.");
     }
   }
 
@@ -923,26 +928,12 @@ export default function RoomPage() {
     setSelectedBotVoterId("");
 
     try {
-      await connectSocketWithTimeout();
-      socketRef.current.timeout(5000).emit(
-        "clear-bots",
-        {
-          playerId: socketId,
-          roomCode: session.roomCode,
-        },
-        (timeoutError: Error | null, response?: SocketAck) => {
-          if (timeoutError) {
-            setError("Bot clear request timed out. Restart or redeploy the server.");
-            return;
-          }
-
-          if (!response?.ok) {
-            setError(response?.error ?? "Could not clear bots.");
-          }
-        },
-      );
-    } catch {
-      setError("Socket is not connected. Try refreshing the room.");
+      await postRoomAction("/api/clear-bots", {
+        playerId: socketId,
+        roomCode: session.roomCode,
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not clear bots.");
     }
   }
 
@@ -1995,9 +1986,7 @@ export default function RoomPage() {
               Start Game
             </button>
             <p className="mt-3 text-sm font-medium text-zinc-400">
-              {!isRealtimeReady
-                ? "Realtime is connecting..."
-                : roleCountMatchesPlayers
+              {roleCountMatchesPlayers
                 ? allGamePlayersReady
                   ? "Ready to start"
                   : "Waiting for every player to press ready"

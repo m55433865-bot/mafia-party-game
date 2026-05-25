@@ -1024,6 +1024,190 @@ app.prepare().then(() => {
       return;
     }
 
+    if (req.method === "POST" && requestUrl.pathname === "/api/add-bots") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const cleanCount = Math.max(1, Math.min(10, Number(body.count) || 1));
+        const room = rooms.get(cleanRoomCode);
+
+        if (!room) {
+          sendJson(res, 404, { ok: false, error: "Room does not exist." });
+          return;
+        }
+
+        if (room.hostId !== cleanPlayerId) {
+          sendJson(res, 403, { ok: false, error: "Only the moderator can add bots." });
+          return;
+        }
+
+        if (room.gameStarted) {
+          sendJson(res, 409, { ok: false, error: "Bots can only be added in lobby." });
+          return;
+        }
+
+        const existingBotCount = Array.from(room.players.values()).filter(
+          (player) => player.isBot,
+        ).length;
+        let addedCount = 0;
+
+        for (let index = 0; index < cleanCount; index += 1) {
+          const bot = createBotPlayer(room, existingBotCount + addedCount + 1);
+
+          if (!bot) {
+            break;
+          }
+
+          room.players.set(bot.id, bot);
+          room.readyPlayerIds.add(bot.id);
+          addedCount += 1;
+        }
+
+        if (addedCount === 0) {
+          sendJson(res, 400, { ok: false, error: "No more bot slots are available." });
+          return;
+        }
+
+        console.log("bots added via http", {
+          count: addedCount,
+          roomCode: cleanRoomCode,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          addedCount,
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not add bots.",
+        });
+      }
+
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/clear-bots") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const room = rooms.get(cleanRoomCode);
+
+        if (!room) {
+          sendJson(res, 404, { ok: false, error: "Room does not exist." });
+          return;
+        }
+
+        if (room.hostId !== cleanPlayerId) {
+          sendJson(res, 403, { ok: false, error: "Only the moderator can clear bots." });
+          return;
+        }
+
+        if (room.gameStarted) {
+          sendJson(res, 409, { ok: false, error: "Bots can only be cleared in lobby." });
+          return;
+        }
+
+        let removedCount = 0;
+        for (const player of room.players.values()) {
+          if (player.isBot) {
+            room.players.delete(player.id);
+            room.readyPlayerIds.delete(player.id);
+            removedCount += 1;
+          }
+        }
+
+        console.log("bots cleared via http", {
+          count: removedCount,
+          roomCode: cleanRoomCode,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          removedCount,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not clear bots.",
+        });
+      }
+
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/start-game") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const incomingSelectedRoles = cleanSelectedRoles(body.selectedRoles);
+        const room = rooms.get(cleanRoomCode);
+
+        if (!room) {
+          sendJson(res, 404, { ok: false, error: "Room does not exist." });
+          return;
+        }
+
+        if (room.hostId !== cleanPlayerId) {
+          sendJson(res, 403, { ok: false, error: "Only the host can start the game." });
+          return;
+        }
+
+        const gamePlayers = getGamePlayers(room);
+        if (incomingSelectedRoles.length > 0) {
+          room.selectedRoles = incomingSelectedRoles;
+        }
+
+        const allPlayersReady =
+          gamePlayers.length > 0 &&
+          gamePlayers.every((player) => room.readyPlayerIds.has(player.id));
+
+        if (!allPlayersReady) {
+          sendJson(res, 400, { ok: false, error: "Waiting for all players to be ready." });
+          return;
+        }
+
+        if (room.selectedRoles.length !== gamePlayers.length) {
+          sendJson(res, 400, { ok: false, error: "Add one role for each player." });
+          return;
+        }
+
+        room.gameStarted = true;
+        room.gameOver = false;
+        room.phase = "simple";
+        room.cupidLoverIds = [];
+        room.votes = new Map();
+        room.revealVoteCounts = false;
+        for (const player of room.players.values()) {
+          player.alive = !player.isHost;
+        }
+        room.roles = assignSelectedRoles(gamePlayers, room.selectedRoles);
+        room.winner = "";
+
+        console.log("roles assigned via http", {
+          roomCode: cleanRoomCode,
+          playerCount: room.players.size,
+        });
+        emitGameStarted(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not start game.",
+        });
+      }
+
+      return;
+    }
+
     handle(req, res);
   });
   io = new Server(httpServer, {
