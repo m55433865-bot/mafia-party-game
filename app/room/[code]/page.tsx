@@ -169,6 +169,7 @@ export default function RoomPage() {
   const [voteSubmitted, setVoteSubmitted] = useState(false);
   const [winner, setWinner] = useState("");
   const [isReconnecting, setIsReconnecting] = useState(false);
+  const [isRealtimeReady, setIsRealtimeReady] = useState(false);
   const [isRoomCodeCopied, setIsRoomCodeCopied] = useState(false);
   const stablePlayerId = useMemo(() => getStablePlayerId(), []);
 
@@ -320,6 +321,7 @@ export default function RoomPage() {
       );
 
       setPlayers(room.players);
+      setIsRealtimeReady(true);
       setAllAlivePlayersVoted(room.allAlivePlayersVoted);
       setConfirmationResponses(room.confirmationResponses);
       setConfirmationVoterIds(room.confirmationVoterIds);
@@ -465,6 +467,7 @@ export default function RoomPage() {
         roomCode: session.roomCode,
       });
       setIsReconnecting(true);
+      setIsRealtimeReady(false);
     }
 
     function handleReconnectAttempt(attempt: number) {
@@ -474,6 +477,7 @@ export default function RoomPage() {
         roomCode: session.roomCode,
       });
       setIsReconnecting(true);
+      setIsRealtimeReady(false);
     }
 
     function handleReconnectSuccess(attempt: number) {
@@ -492,6 +496,7 @@ export default function RoomPage() {
         roomCode: session.roomCode,
       });
       setIsReconnecting(true);
+      setIsRealtimeReady(false);
     }
 
     function handleConnectError(error: Error) {
@@ -501,6 +506,7 @@ export default function RoomPage() {
         roomCode: session.roomCode,
       });
       setIsReconnecting(true);
+      setIsRealtimeReady(false);
     }
 
     function handleSessionRestored(restoredSession: {
@@ -521,6 +527,7 @@ export default function RoomPage() {
       setRole(restoredSession.role);
       setPhase(restoredSession.phase);
       setIsReconnecting(false);
+      setIsRealtimeReady(true);
     }
 
     function handleOnline() {
@@ -702,7 +709,10 @@ export default function RoomPage() {
     gamePlayers.every((player) => readyPlayerIds.includes(player.id));
   const roleCountMatchesPlayers = selectedRoles.length === gamePlayers.length;
   const canStartGame =
-    isCurrentHost && allGamePlayersReady && roleCountMatchesPlayers;
+    isCurrentHost &&
+    isRealtimeReady &&
+    allGamePlayersReady &&
+    roleCountMatchesPlayers;
   const currentPlayerReady = readyPlayerIds.includes(socketId);
   const assignedRoleEntries = gamePlayers.map((player) => ({
     player,
@@ -1917,11 +1927,29 @@ export default function RoomPage() {
               Start Game
             </button>
             <p className="mt-3 text-sm font-medium text-zinc-400">
-              {roleCountMatchesPlayers
+              {!isRealtimeReady
+                ? "Realtime is connecting..."
+                : roleCountMatchesPlayers
                 ? allGamePlayersReady
                   ? "Ready to start"
                   : "Waiting for every player to press ready"
                 : "Add one role for each player"}
+            </p>
+            <div className="mt-3 overflow-hidden rounded-full bg-zinc-800">
+              <div
+                className={`h-2 rounded-full transition-all duration-500 ${
+                  isRealtimeReady ? "w-full bg-emerald-400" : "w-2/3 bg-amber-400"
+                }`}
+              />
+            </div>
+            <p
+              className={`mt-2 text-xs font-bold ${
+                isRealtimeReady ? "text-emerald-300" : "text-amber-300"
+              }`}
+            >
+              {isRealtimeReady
+                ? "Realtime connected"
+                : "Connecting realtime updates before Start Game"}
             </p>
           </>
         ) : null}

@@ -1,30 +1,15 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { MafiaProfile } from "./lib/mafiaProfile";
 import {
   ensureMafiaProfile,
   isMafiaProfileComplete,
 } from "./lib/mafiaProfile";
 import { RoleImagePreloader } from "./components/RoleImagePreloader";
-import {
-  connectSocketWithTimeout,
-  getStablePlayerId,
-  socket,
-} from "./lib/socket";
+import { getStablePlayerId, socket } from "./lib/socket";
 import { supabase } from "./lib/supabase";
-
-type Player = {
-  id: string;
-  name: string;
-  isHost: boolean;
-};
-
-type RoomUpdate = {
-  roomCode: string;
-  players: Player[];
-};
 
 export default function Home() {
   const router = useRouter();
@@ -35,14 +20,6 @@ export default function Home() {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
-  const pendingActionTimeoutRef = useRef<number | null>(null);
-
-  function clearPendingActionTimeout() {
-    if (pendingActionTimeoutRef.current) {
-      window.clearTimeout(pendingActionTimeoutRef.current);
-      pendingActionTimeoutRef.current = null;
-    }
-  }
 
   function enterRoom({
     avatarUrl,
@@ -59,7 +36,6 @@ export default function Home() {
       throw new Error("The server did not return a room code.");
     }
 
-    clearPendingActionTimeout();
     sessionStorage.setItem("playerName", playerName);
     sessionStorage.setItem("roomCode", nextRoomCode);
     sessionStorage.setItem("isHost", String(isHost));
@@ -136,51 +112,6 @@ export default function Home() {
     };
   }, [router]);
 
-  useEffect(() => {
-    function handleRoomUpdated(room: RoomUpdate) {
-      const currentPlayer = room.players.find(
-        (player) => player.id === getStablePlayerId(),
-      );
-
-      if (!currentPlayer) {
-        return;
-      }
-
-      sessionStorage.setItem("playerName", currentPlayer.name);
-      sessionStorage.setItem("roomCode", room.roomCode);
-      sessionStorage.setItem("isHost", String(currentPlayer.isHost));
-      sessionStorage.setItem("avatarUrl", profile?.avatar_url ?? "");
-      clearPendingActionTimeout();
-      setLoadingMessage("Opening room...");
-      router.push(`/room/${room.roomCode}`);
-    }
-
-    function handleErrorMessage(message: string) {
-      setError(message);
-      setIsLoading(false);
-      setLoadingMessage("");
-      clearPendingActionTimeout();
-    }
-
-    // Socket.io events drive room creation and joining from the homepage.
-    socket.on("room-updated", handleRoomUpdated);
-    socket.on("error-message", handleErrorMessage);
-
-    return () => {
-      clearPendingActionTimeout();
-      socket.off("room-updated", handleRoomUpdated);
-      socket.off("error-message", handleErrorMessage);
-    };
-  }, [profile?.avatar_url, router]);
-
-  async function resetAndConnect() {
-    setError("");
-    setIsLoading(true);
-    setLoadingMessage("Connecting to server...");
-    await connectSocketWithTimeout();
-    setLoadingMessage("Creating room...");
-  }
-
   function getPlayerName() {
     return profile?.display_name?.trim() ?? "";
   }
@@ -195,48 +126,25 @@ export default function Home() {
 
     try {
       const startedAt = performance.now();
+      setError("");
+      setIsLoading(true);
+      setLoadingMessage("Creating room...");
       const payload = {
         avatarUrl: profile?.avatar_url ?? "",
         playerId: getStablePlayerId(),
         playerName,
       };
 
-      try {
-        await resetAndConnect();
-        socket.emit("create-room", payload);
-        clearPendingActionTimeout();
-        pendingActionTimeoutRef.current = window.setTimeout(async () => {
-          try {
-            setLoadingMessage("Creating room...");
-            const response = await postRoomAction("/api/create-room", payload);
-            enterRoom({
-              avatarUrl: payload.avatarUrl,
-              isHost: response.isHost ?? true,
-              playerName,
-              roomCode: response.roomCode ?? "",
-            });
-          } catch (error) {
-            setError(
-              error instanceof Error ? error.message : "Could not create the room.",
-            );
-            setIsLoading(false);
-            setLoadingMessage("");
-          }
-        }, 2500);
-      } catch {
-        setLoadingMessage("Creating room...");
-        const response = await postRoomAction("/api/create-room", payload);
-        enterRoom({
-          avatarUrl: payload.avatarUrl,
-          isHost: response.isHost ?? true,
-          playerName,
-          roomCode: response.roomCode ?? "",
-        });
-      }
+      const response = await postRoomAction("/api/create-room", payload);
+      enterRoom({
+        avatarUrl: payload.avatarUrl,
+        isHost: response.isHost ?? true,
+        playerName,
+        roomCode: response.roomCode ?? "",
+      });
 
-      console.log("create-room requested", {
+      console.log("create-room completed over http", {
         elapsedMs: Math.round(performance.now() - startedAt),
-        socketConnected: socket.connected,
       });
     } catch (error) {
       setError(
@@ -244,7 +152,6 @@ export default function Home() {
       );
       setIsLoading(false);
       setLoadingMessage("");
-      clearPendingActionTimeout();
     }
   }
 
@@ -264,6 +171,8 @@ export default function Home() {
 
     try {
       const startedAt = performance.now();
+      setError("");
+      setIsLoading(true);
       setLoadingMessage("Joining room...");
       const payload = {
         avatarUrl: profile?.avatar_url ?? "",
@@ -272,42 +181,16 @@ export default function Home() {
         roomCode: nextRoomCode,
       };
 
-      try {
-        await resetAndConnect();
-        setLoadingMessage("Joining room...");
-        socket.emit("join-room", payload);
-        clearPendingActionTimeout();
-        pendingActionTimeoutRef.current = window.setTimeout(async () => {
-          try {
-            setLoadingMessage("Joining room...");
-            const response = await postRoomAction("/api/join-room", payload);
-            enterRoom({
-              avatarUrl: payload.avatarUrl,
-              isHost: response.isHost ?? false,
-              playerName,
-              roomCode: response.roomCode ?? nextRoomCode,
-            });
-          } catch (error) {
-            setError(
-              error instanceof Error ? error.message : "Could not join the room.",
-            );
-            setIsLoading(false);
-            setLoadingMessage("");
-          }
-        }, 2500);
-      } catch {
-        const response = await postRoomAction("/api/join-room", payload);
-        enterRoom({
-          avatarUrl: payload.avatarUrl,
-          isHost: response.isHost ?? false,
-          playerName,
-          roomCode: response.roomCode ?? nextRoomCode,
-        });
-      }
+      const response = await postRoomAction("/api/join-room", payload);
+      enterRoom({
+        avatarUrl: payload.avatarUrl,
+        isHost: response.isHost ?? false,
+        playerName,
+        roomCode: response.roomCode ?? nextRoomCode,
+      });
 
-      console.log("join-room requested", {
+      console.log("join-room completed over http", {
         elapsedMs: Math.round(performance.now() - startedAt),
-        socketConnected: socket.connected,
       });
     } catch (error) {
       setError(
@@ -315,7 +198,6 @@ export default function Home() {
       );
       setIsLoading(false);
       setLoadingMessage("");
-      clearPendingActionTimeout();
     }
   }
 
