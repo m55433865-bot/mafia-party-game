@@ -46,6 +46,29 @@ const PLAYER_ICONS = [
   "👨‍🍳",
 ];
 
+const BOT_NAMES = [
+  "Nero",
+  "Salem",
+  "Vito",
+  "Raven",
+  "Mira",
+  "Dante",
+  "Silas",
+  "Ivy",
+  "Knox",
+  "Luna",
+  "Gio",
+  "Rosa",
+  "Enzo",
+  "Nova",
+  "Ash",
+  "Vale",
+  "Cleo",
+  "Marco",
+  "Nyx",
+  "Zara",
+];
+
 const ROLE_OPTIONS = [
   "Detective",
   "Doctor",
@@ -131,6 +154,14 @@ function getRandomAvailableIcon(room) {
 function createBotPlayer(room, botNumber) {
   const color = getRandomAvailableColor(room);
   const icon = getRandomAvailableIcon(room);
+  const usedNames = new Set(
+    Array.from(room.players.values()).map((player) => player.name),
+  );
+  const availableNames = BOT_NAMES.filter((name) => !usedNames.has(name));
+  const baseName =
+    availableNames.length > 0
+      ? availableNames[Math.floor(Math.random() * availableNames.length)]
+      : `Bot ${botNumber}`;
 
   if (!color || !icon) {
     return null;
@@ -146,7 +177,7 @@ function createBotPlayer(room, botNumber) {
     id: `bot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     isBot: true,
     isHost: false,
-    name: `Bot ${botNumber}`,
+    name: baseName,
     reconnectTimeout: null,
     socketId: "",
   };
@@ -1231,23 +1262,28 @@ app.prepare().then(() => {
       emitRoomUpdated(io, cleanRoomCode, room);
     });
 
-    socket.on("add-bots", ({ roomCode, count }) => {
+    socket.on("add-bots", ({ roomCode, count, playerId } = {}, done) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const cleanCount = Math.max(1, Math.min(10, Number(count) || 1));
+      const cleanPlayerId = String(playerId ?? getSocketPlayerId(socket)).trim();
       const room = rooms.get(cleanRoomCode);
+      const fail = (error) => {
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
+      };
 
       if (!room) {
-        socket.emit("error-message", "Room does not exist.");
+        fail("Room does not exist.");
         return;
       }
 
-      if (room.hostId !== getSocketPlayerId(socket)) {
-        socket.emit("error-message", "Only the moderator can add bots.");
+      if (room.hostId !== cleanPlayerId) {
+        fail("Only the moderator can add bots.");
         return;
       }
 
       if (room.gameStarted) {
-        socket.emit("error-message", "Bots can only be added in lobby.");
+        fail("Bots can only be added in lobby.");
         return;
       }
 
@@ -1269,47 +1305,61 @@ app.prepare().then(() => {
       }
 
       if (addedCount === 0) {
-        socket.emit("error-message", "No more bot slots are available.");
+        fail("No more bot slots are available.");
         return;
       }
 
+      socket.data.playerId = cleanPlayerId;
+      socket.data.roomCode = cleanRoomCode;
       console.log("bots added", {
         count: addedCount,
         roomCode: cleanRoomCode,
       });
       emitRoomUpdated(io, cleanRoomCode, room);
+      done?.({ addedCount, ok: true });
     });
 
-    socket.on("clear-bots", ({ roomCode }) => {
+    socket.on("clear-bots", ({ roomCode, playerId } = {}, done) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const cleanPlayerId = String(playerId ?? getSocketPlayerId(socket)).trim();
       const room = rooms.get(cleanRoomCode);
+      const fail = (error) => {
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
+      };
 
       if (!room) {
-        socket.emit("error-message", "Room does not exist.");
+        fail("Room does not exist.");
         return;
       }
 
-      if (room.hostId !== getSocketPlayerId(socket)) {
-        socket.emit("error-message", "Only the moderator can clear bots.");
+      if (room.hostId !== cleanPlayerId) {
+        fail("Only the moderator can clear bots.");
         return;
       }
 
       if (room.gameStarted) {
-        socket.emit("error-message", "Bots can only be cleared in lobby.");
+        fail("Bots can only be cleared in lobby.");
         return;
       }
 
+      let removedCount = 0;
       for (const player of room.players.values()) {
         if (player.isBot) {
           room.players.delete(player.id);
           room.readyPlayerIds.delete(player.id);
+          removedCount += 1;
         }
       }
 
+      socket.data.playerId = cleanPlayerId;
+      socket.data.roomCode = cleanRoomCode;
       console.log("bots cleared", {
+        count: removedCount,
         roomCode: cleanRoomCode,
       });
       emitRoomUpdated(io, cleanRoomCode, room);
+      done?.({ ok: true, removedCount });
     });
 
     socket.on("add-selected-role", ({ roomCode, role }) => {
@@ -1593,19 +1643,29 @@ app.prepare().then(() => {
       emitRoomUpdated(io, cleanRoomCode, room);
     });
 
-    socket.on("moderator-bot-vote", ({ roomCode, botPlayerId, targetPlayerId }) => {
+    socket.on("moderator-bot-vote", ({
+      roomCode,
+      botPlayerId,
+      targetPlayerId,
+      playerId,
+    } = {}, done) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const cleanBotPlayerId = String(botPlayerId ?? "").trim();
       const cleanTargetPlayerId = String(targetPlayerId ?? "").trim();
+      const cleanPlayerId = String(playerId ?? getSocketPlayerId(socket)).trim();
       const room = rooms.get(cleanRoomCode);
+      const fail = (error) => {
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
+      };
 
       if (!room || !room.gameStarted || room.gameOver || room.phase !== "day") {
-        socket.emit("error-message", "Voting is not active.");
+        fail("Voting is not active.");
         return;
       }
 
-      if (room.hostId !== getSocketPlayerId(socket)) {
-        socket.emit("error-message", "Only the moderator can vote for bots.");
+      if (room.hostId !== cleanPlayerId) {
+        fail("Only the moderator can vote for bots.");
         return;
       }
 
@@ -1618,25 +1678,27 @@ app.prepare().then(() => {
         !targetPlayer ||
         targetPlayer.isHost
       ) {
-        socket.emit("error-message", "Player not found.");
+        fail("Player not found.");
         return;
       }
 
       if (!botPlayer.alive) {
-        socket.emit("error-message", "Dead bots cannot vote.");
+        fail("Dead bots cannot vote.");
         return;
       }
 
       if (!targetPlayer.alive) {
-        socket.emit("error-message", "Bots can only vote for alive players.");
+        fail("Bots can only vote for alive players.");
         return;
       }
 
       if (botPlayer.id === targetPlayer.id) {
-        socket.emit("error-message", "A bot cannot vote for itself.");
+        fail("A bot cannot vote for itself.");
         return;
       }
 
+      socket.data.playerId = cleanPlayerId;
+      socket.data.roomCode = cleanRoomCode;
       room.votes.set(botPlayer.id, targetPlayer.id);
       console.log("bot vote submitted", {
         botPlayerId: botPlayer.id,
@@ -1644,6 +1706,7 @@ app.prepare().then(() => {
         targetPlayerId: targetPlayer.id,
       });
       emitRoomUpdated(io, cleanRoomCode, room);
+      done?.({ ok: true });
     });
 
     socket.on("open-voting", ({ roomCode }) => {

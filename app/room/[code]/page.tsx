@@ -14,7 +14,11 @@ import {
 } from "../../lib/mafiaProfile";
 import { RoleImagePreloader } from "../../components/RoleImagePreloader";
 import { getRoleCard } from "../../lib/roles";
-import { getStablePlayerId, socket } from "../../lib/socket";
+import {
+  connectSocketWithTimeout,
+  getStablePlayerId,
+  socket,
+} from "../../lib/socket";
 import { supabase } from "../../lib/supabase";
 
 type Player = {
@@ -78,6 +82,13 @@ type GameStarted = {
 type VoteTarget = {
   targetPlayerId: string;
   voterId: string;
+};
+
+type SocketAck = {
+  addedCount?: number;
+  error?: string;
+  ok: boolean;
+  removedCount?: number;
 };
 
 let pendingLeaveTimeout: number | null = null;
@@ -809,20 +820,60 @@ export default function RoomPage() {
     });
   }
 
-  function handleAddBots(count: number) {
+  async function handleAddBots(count: number) {
     setError("");
-    socketRef.current.emit("add-bots", {
-      count,
-      roomCode: session.roomCode,
-    });
+
+    try {
+      await connectSocketWithTimeout();
+      socketRef.current.timeout(5000).emit(
+        "add-bots",
+        {
+          count,
+          playerId: socketId,
+          roomCode: session.roomCode,
+        },
+        (timeoutError: Error | null, response?: SocketAck) => {
+          if (timeoutError) {
+            setError("Bot add request timed out. Restart or redeploy the server.");
+            return;
+          }
+
+          if (!response?.ok) {
+            setError(response?.error ?? "Could not add bots.");
+          }
+        },
+      );
+    } catch {
+      setError("Socket is not connected. Try refreshing the room.");
+    }
   }
 
-  function handleClearBots() {
+  async function handleClearBots() {
     setError("");
     setSelectedBotVoterId("");
-    socketRef.current.emit("clear-bots", {
-      roomCode: session.roomCode,
-    });
+
+    try {
+      await connectSocketWithTimeout();
+      socketRef.current.timeout(5000).emit(
+        "clear-bots",
+        {
+          playerId: socketId,
+          roomCode: session.roomCode,
+        },
+        (timeoutError: Error | null, response?: SocketAck) => {
+          if (timeoutError) {
+            setError("Bot clear request timed out. Restart or redeploy the server.");
+            return;
+          }
+
+          if (!response?.ok) {
+            setError(response?.error ?? "Could not clear bots.");
+          }
+        },
+      );
+    } catch {
+      setError("Socket is not connected. Try refreshing the room.");
+    }
   }
 
   function handleVote(targetPlayerId: string) {
@@ -842,10 +893,20 @@ export default function RoomPage() {
     }
 
     setError("");
-    socketRef.current.emit("moderator-bot-vote", {
+    socketRef.current.timeout(5000).emit("moderator-bot-vote", {
       botPlayerId: selectedBotVoterId,
+      playerId: socketId,
       roomCode: session.roomCode,
       targetPlayerId,
+    }, (timeoutError: Error | null, response?: SocketAck) => {
+      if (timeoutError) {
+        setError("Bot vote request timed out. Restart or redeploy the server.");
+        return;
+      }
+
+      if (!response?.ok) {
+        setError(response?.error ?? "Could not submit bot vote.");
+      }
     });
   }
 
