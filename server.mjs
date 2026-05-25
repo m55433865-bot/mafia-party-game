@@ -651,6 +651,41 @@ function checkWinCondition(room) {
   return false;
 }
 
+function removeVotesForDeadPlayers(room, deadPlayerIds) {
+  for (const [voterId, votedPlayerId] of room.votes.entries()) {
+    if (deadPlayerIds.includes(voterId) || deadPlayerIds.includes(votedPlayerId)) {
+      room.votes.delete(voterId);
+    }
+  }
+}
+
+function eliminatePlayer(room, targetPlayerId) {
+  const targetPlayer = room.players.get(targetPlayerId);
+
+  if (!targetPlayer || targetPlayer.isHost || !targetPlayer.alive) {
+    return [];
+  }
+
+  const eliminatedIds = [targetPlayer.id];
+  targetPlayer.alive = false;
+
+  if (room.cupidLoverIds.includes(targetPlayer.id)) {
+    const linkedLoverId = room.cupidLoverIds.find(
+      (loverId) => loverId !== targetPlayer.id,
+    );
+    const linkedLover = linkedLoverId ? room.players.get(linkedLoverId) : null;
+
+    if (linkedLover && !linkedLover.isHost && linkedLover.alive) {
+      linkedLover.alive = false;
+      eliminatedIds.push(linkedLover.id);
+    }
+  }
+
+  room.lastEliminatedPlayerId = targetPlayer.id;
+  removeVotesForDeadPlayers(room, eliminatedIds);
+  return eliminatedIds;
+}
+
 function findPlayerId(socket, room, playerId, playerName) {
   if (playerId && room.players.has(playerId)) {
     return playerId;
@@ -1202,6 +1237,119 @@ app.prepare().then(() => {
         sendJson(res, 400, {
           ok: false,
           error: error instanceof Error ? error.message : "Could not start game.",
+        });
+      }
+
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/set-cupid-lovers") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const cleanLoverIds = Array.isArray(body.loverIds)
+          ? body.loverIds.map((loverId) => String(loverId ?? "").trim()).filter(Boolean)
+          : [];
+        const room = rooms.get(cleanRoomCode);
+
+        if (!room || !room.gameStarted || room.gameOver) {
+          sendJson(res, 400, {
+            ok: false,
+            error: "Cupid lovers can only be set during a game.",
+          });
+          return;
+        }
+
+        if (room.hostId !== cleanPlayerId) {
+          sendJson(res, 403, {
+            ok: false,
+            error: "Only the moderator can set Cupid lovers.",
+          });
+          return;
+        }
+
+        if (!Array.from(room.roles.values()).includes("Cupid")) {
+          sendJson(res, 400, { ok: false, error: "Cupid is not in this game." });
+          return;
+        }
+
+        if (cleanLoverIds.length !== 2 || cleanLoverIds[0] === cleanLoverIds[1]) {
+          sendJson(res, 400, { ok: false, error: "Choose two different lovers." });
+          return;
+        }
+
+        const lovers = cleanLoverIds.map((loverId) => room.players.get(loverId));
+
+        if (lovers.some((lover) => !lover || lover.isHost || !lover.alive)) {
+          sendJson(res, 400, { ok: false, error: "Choose two alive players." });
+          return;
+        }
+
+        room.cupidLoverIds = cleanLoverIds;
+        console.log("cupid lovers set via http", {
+          loverIds: cleanLoverIds,
+          roomCode: cleanRoomCode,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not set Cupid lovers.",
+        });
+      }
+
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/moderator-kill-player") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const cleanTargetPlayerId = String(body.targetPlayerId ?? "").trim();
+        const room = rooms.get(cleanRoomCode);
+
+        if (!room || !room.gameStarted || room.gameOver) {
+          sendJson(res, 400, { ok: false, error: "Game is not active." });
+          return;
+        }
+
+        if (room.hostId !== cleanPlayerId) {
+          sendJson(res, 403, {
+            ok: false,
+            error: "Only the moderator can kill players.",
+          });
+          return;
+        }
+
+        const eliminatedIds = eliminatePlayer(room, cleanTargetPlayerId);
+
+        if (eliminatedIds.length === 0) {
+          sendJson(res, 400, { ok: false, error: "Choose an alive player." });
+          return;
+        }
+
+        checkWinCondition(room);
+        console.log("moderator killed player via http", {
+          eliminatedIds,
+          roomCode: cleanRoomCode,
+          targetPlayerId: cleanTargetPlayerId,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          eliminatedIds,
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not kill player.",
         });
       }
 
@@ -2119,14 +2267,8 @@ app.prepare().then(() => {
         return;
       }
 
-      targetPlayer.alive = false;
-      room.lastEliminatedPlayerId = targetPlayer.id;
-
-      for (const [voterId, votedPlayerId] of room.votes.entries()) {
-        if (voterId === targetPlayer.id || votedPlayerId === targetPlayer.id) {
-          room.votes.delete(voterId);
-        }
-      }
+      eliminatePlayer(room, targetPlayer.id);
+      checkWinCondition(room);
 
       emitRoomUpdated(io, cleanRoomCode, room);
     });
@@ -2310,8 +2452,12 @@ app.prepare().then(() => {
       const savedPlayerId = room.nightActions.doctorTargetId;
 
       if (killedPlayer && killedPlayer.id !== savedPlayerId) {
-        killedPlayer.alive = false;
-        room.nightResultMessage = `${killedPlayer.name} was killed during the night.`;
+        const eliminatedIds = eliminatePlayer(room, killedPlayer.id);
+        const linkedDeaths = eliminatedIds.length - 1;
+        room.nightResultMessage =
+          linkedDeaths > 0
+            ? `${killedPlayer.name} was killed during the night. Their lover died too.`
+            : `${killedPlayer.name} was killed during the night.`;
       } else if (killedPlayer && killedPlayer.id === savedPlayerId) {
         room.nightResultMessage = "The Doctor saved the target. Nobody died.";
       } else {

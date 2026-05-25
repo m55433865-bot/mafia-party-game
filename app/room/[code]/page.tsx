@@ -1041,12 +1041,18 @@ export default function RoomPage() {
     handleCancelGame();
   }
 
-  function handleModeratorKillPlayer(targetPlayerId: string) {
+  async function handleModeratorKillPlayer(targetPlayerId: string) {
     setError("");
-    socketRef.current.emit("moderator-kill-player", {
-      roomCode: session.roomCode,
-      targetPlayerId,
-    });
+
+    try {
+      await postRoomAction("/api/moderator-kill-player", {
+        playerId: socketId,
+        roomCode: session.roomCode,
+        targetPlayerId,
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not kill player.");
+    }
   }
 
   function handleToggleCupidLover(playerId: string) {
@@ -1060,12 +1066,20 @@ export default function RoomPage() {
     });
   }
 
-  function handleSetCupidLovers() {
+  async function handleSetCupidLovers() {
     setError("");
-    socketRef.current.emit("set-cupid-lovers", {
-      loverIds: selectedCupidLoverIds,
-      roomCode: session.roomCode,
-    });
+
+    try {
+      await postRoomAction("/api/set-cupid-lovers", {
+        loverIds: selectedCupidLoverIds,
+        playerId: socketId,
+        roomCode: session.roomCode,
+      });
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Could not set Cupid lovers.",
+      );
+    }
   }
 
   function handleToggleModeratorTimer() {
@@ -1160,7 +1174,7 @@ export default function RoomPage() {
         className={`flex items-center gap-2 font-semibold ${
           alignRight ? "justify-end text-right" : ""
         }`}
-        style={{ color: player.color }}
+        style={{ color: !player.isHost && !player.alive ? "#71717a" : player.color }}
       >
         {player.avatarUrl ? (
           <span
@@ -1620,8 +1634,13 @@ export default function RoomPage() {
                   className="mt-4 min-h-14 w-full rounded-xl bg-pink-500 px-4 text-base font-bold text-white transition hover:bg-pink-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
                   type="button"
                 >
-                  Create Lovers Table
+                  Submit Lovers
                 </button>
+                {cupidLoverIds.length === 2 ? (
+                  <p className="mt-3 text-sm font-bold text-pink-100">
+                    Lovers submitted
+                  </p>
+                ) : null}
               </>
             ) : (
               <p className="mt-3 text-sm text-zinc-400">
@@ -1673,13 +1692,18 @@ export default function RoomPage() {
                   <span className="rounded-full bg-red-500/10 px-3 py-1 text-sm font-medium text-red-200">
                     {player.isHost ? "Host" : player.isBot ? "Bot" : "Player"}
                   </span>
-                  {gameStarted && isCurrentHost && !player.isHost && player.alive ? (
+                  {gameStarted && isCurrentHost && !player.isHost ? (
                     <button
                       onClick={() => handleModeratorKillPlayer(player.id)}
-                      className="min-h-8 rounded-full border border-red-500/30 bg-red-500/10 px-3 text-xs font-bold text-red-100 transition hover:border-red-400"
+                      disabled={!player.alive}
+                      className={`min-h-8 rounded-full border px-3 text-xs font-bold transition ${
+                        player.alive
+                          ? "border-red-500/30 bg-red-500/10 text-red-100 hover:border-red-400"
+                          : "cursor-not-allowed border-zinc-700 bg-zinc-900 text-zinc-500"
+                      }`}
                       type="button"
                     >
-                      Kill
+                      {player.alive ? "Kill" : "Off"}
                     </button>
                   ) : null}
                 </div>
