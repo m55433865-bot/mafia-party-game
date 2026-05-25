@@ -174,9 +174,7 @@ export default function RoomPage() {
   const [isModeratorTimerRunning, setIsModeratorTimerRunning] = useState(false);
   const [voteSubmitted, setVoteSubmitted] = useState(false);
   const [winner, setWinner] = useState("");
-  const [isReconnecting, setIsReconnecting] = useState(false);
   const [isRealtimeReady, setIsRealtimeReady] = useState(false);
-  const [realtimeAttempt, setRealtimeAttempt] = useState(0);
   const [isRoomCodeCopied, setIsRoomCodeCopied] = useState(false);
   const stablePlayerId = useMemo(() => getStablePlayerId(), []);
 
@@ -465,7 +463,6 @@ export default function RoomPage() {
 
     function handleConnect() {
       setSocketId(stablePlayerId);
-      setIsReconnecting(false);
       emitRoomRestore("connect");
     }
 
@@ -476,7 +473,6 @@ export default function RoomPage() {
         reason,
         roomCode: session.roomCode,
       });
-      setIsReconnecting(true);
       setIsRealtimeReady(false);
     }
 
@@ -486,7 +482,6 @@ export default function RoomPage() {
         playerId: stablePlayerId,
         roomCode: session.roomCode,
       });
-      setIsReconnecting(true);
       setIsRealtimeReady(false);
     }
 
@@ -496,7 +491,6 @@ export default function RoomPage() {
         playerId: stablePlayerId,
         roomCode: session.roomCode,
       });
-      setIsReconnecting(false);
     }
 
     function handleReconnectFailure(error: Error) {
@@ -505,7 +499,6 @@ export default function RoomPage() {
         playerId: stablePlayerId,
         roomCode: session.roomCode,
       });
-      setIsReconnecting(true);
       setIsRealtimeReady(false);
     }
 
@@ -515,7 +508,6 @@ export default function RoomPage() {
         playerId: stablePlayerId,
         roomCode: session.roomCode,
       });
-      setIsReconnecting(true);
       setIsRealtimeReady(false);
     }
 
@@ -536,7 +528,6 @@ export default function RoomPage() {
       setSocketId(restoredSession.playerId);
       setRole(restoredSession.role);
       setPhase(restoredSession.phase);
-      setIsReconnecting(false);
       setIsRealtimeReady(true);
     }
 
@@ -641,7 +632,6 @@ export default function RoomPage() {
     session.playerName,
     session.roomCode,
     stablePlayerId,
-    realtimeAttempt,
     applyRoomUpdate,
   ]);
 
@@ -937,14 +927,6 @@ export default function RoomPage() {
     }
   }
 
-  function handleRetryRealtime() {
-    setError("");
-    setIsReconnecting(true);
-    setIsRealtimeReady(false);
-    socketRef.current.disconnect();
-    setRealtimeAttempt((attempt) => attempt + 1);
-  }
-
   function handleVote(targetPlayerId: string) {
     setSelectedVote(targetPlayerId);
     setVoteSubmitted(true);
@@ -1205,11 +1187,6 @@ export default function RoomPage() {
         <span className={!player.isHost && !player.alive ? "line-through" : ""}>
           {player.name}
         </span>
-        {!player.connected ? (
-          <span className="text-xs font-bold text-amber-200">
-            (reconnecting...)
-          </span>
-        ) : null}
       </span>
     );
   }
@@ -1242,12 +1219,6 @@ export default function RoomPage() {
             {isRoomCodeCopied ? "Copied" : "Tap to copy"}
           </span>
         </button>
-
-        {isReconnecting ? (
-          <p className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm font-bold text-amber-100">
-            Reconnecting...
-          </p>
-        ) : null}
 
         {isCurrentHost && !gameStarted ? (
           <div className="mt-5 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-5 text-left">
@@ -1992,31 +1963,6 @@ export default function RoomPage() {
                   : "Waiting for every player to press ready"
                 : "Add one role for each player"}
             </p>
-            <div className="mt-3 overflow-hidden rounded-full bg-zinc-800">
-              <div
-                className={`h-2 rounded-full transition-all duration-500 ${
-                  isRealtimeReady ? "w-full bg-emerald-400" : "w-2/3 bg-amber-400"
-                }`}
-              />
-            </div>
-            <p
-              className={`mt-2 text-xs font-bold ${
-                isRealtimeReady ? "text-emerald-300" : "text-amber-300"
-              }`}
-            >
-              {isRealtimeReady
-                ? "Realtime connected"
-                : "Using fallback refresh while realtime connects"}
-            </p>
-            {!isRealtimeReady ? (
-              <button
-                onClick={handleRetryRealtime}
-                className="mt-3 min-h-11 w-full rounded-xl border border-amber-400/40 bg-zinc-950 px-4 text-sm font-bold text-amber-100 transition hover:border-amber-300 active:scale-[0.98]"
-                type="button"
-              >
-                Retry Realtime
-              </button>
-            ) : null}
           </>
         ) : null}
 
