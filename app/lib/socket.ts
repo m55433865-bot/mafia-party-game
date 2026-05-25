@@ -44,7 +44,7 @@ export const socket = io(socketUrl, {
   reconnectionDelayMax: 5000,
   randomizationFactor: 0.5,
   timeout: 10000,
-  transports: ["websocket", "polling"],
+  transports: ["polling", "websocket"],
   tryAllTransports: true,
   upgrade: true,
 });

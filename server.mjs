@@ -1039,7 +1039,7 @@ app.prepare().then(() => {
       },
     },
     path: "/socket.io/",
-    transports: ["websocket", "polling"],
+    transports: ["polling", "websocket"],
   });
 
   io.engine.on("connection_error", (error) => {
