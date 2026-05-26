@@ -24,7 +24,7 @@ export function getRoleCard(role: string): RoleCard {
       artClassName: "from-red-950 via-zinc-950 to-red-700",
       imageLabel: "M",
       imageSrc: "/roles/mafia.png",
-      nightAbility: "Choose one player to attack.",
+      nightAbility: "Kill one player each night.",
       title: "Mafia",
       winCondition: "Equal or outnumber the villagers.",
     };
@@ -35,7 +35,7 @@ export function getRoleCard(role: string): RoleCard {
       artClassName: "from-emerald-950 via-zinc-950 to-emerald-600",
       imageLabel: "D",
       imageSrc: "/roles/doctor.png",
-      nightAbility: "Choose one player to protect.",
+      nightAbility: "Protect one player each night.",
       title: "Doctor",
       winCondition: "Eliminate all Mafia.",
     };
@@ -92,7 +92,8 @@ export function getRoleCard(role: string): RoleCard {
       artClassName: "from-red-950 via-zinc-950 to-purple-700",
       imageLabel: "MJ",
       imageSrc: "/roles/mafia-jester.png",
-      nightAbility: "Act with Mafia at night.",
+      nightAbility:
+        "Act with Mafia at night. If voted out, pick one voter to take with you.",
       title: "Mafia Jester",
       winCondition: "Eliminate villagers.",
     };
