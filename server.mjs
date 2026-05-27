@@ -103,10 +103,10 @@ function isDetectiveMafiaResult(role) {
 }
 
 function generateRoomCode() {
-  const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const characters = "0123456789";
   let code = "";
 
-  for (let i = 0; i < 6; i += 1) {
+  for (let i = 0; i < 2; i += 1) {
     code += characters[Math.floor(Math.random() * characters.length)];
   }
 
@@ -197,6 +197,7 @@ function createEmptyRoom(hostId) {
   return {
     confirmationResponses: new Set(),
     confirmationChangedVoters: new Set(),
+    confirmationResolvedVoters: new Set(),
     cupidLoverIds: [],
     defenseEndsAt: 0,
     gameOver: false,
@@ -435,6 +436,34 @@ function getVoteCountForPlayer(voteCounts, playerId) {
   return Number(voteCounts[playerId] ?? 0);
 }
 
+function getNextDefenseNomineeId(room, voteCounts, currentNomineeId) {
+  const currentNomineeVotes = getVoteCountForPlayer(voteCounts, currentNomineeId);
+
+  return (
+    Object.entries(voteCounts)
+      .filter(([playerId, voteCount]) => {
+        if (playerId === currentNomineeId || voteCount < currentNomineeVotes) {
+          return false;
+        }
+
+        return Array.from(room.votes.entries()).some(
+          ([voterId, targetPlayerId]) => {
+            const voter = room.players.get(voterId);
+
+            return (
+              targetPlayerId === playerId &&
+              voter?.alive &&
+              !voter.isHost &&
+              !room.confirmationResolvedVoters.has(voterId)
+            );
+          },
+        );
+      })
+      .sort(([, voteCountA], [, voteCountB]) => voteCountB - voteCountA)[0]?.[0] ??
+    ""
+  );
+}
+
 function getConfirmationVoterIds(room) {
   if (!room.pendingEliminationId) {
     return [];
@@ -448,7 +477,7 @@ function getConfirmationVoterIds(room) {
         targetPlayerId === room.pendingEliminationId &&
         voter?.alive &&
         !voter.isHost &&
-        !room.confirmationChangedVoters.has(voterId)
+        !room.confirmationResolvedVoters.has(voterId)
       );
     })
     .map(([voterId]) => voterId);
@@ -520,6 +549,7 @@ function endVotingPhase(room) {
   const nomineeId = getHighestVotedPlayerId(voteCounts);
 
   room.confirmationChangedVoters = new Set();
+  room.confirmationResolvedVoters = new Set();
   room.lastEliminatedPlayerId = "";
   startDefensePhase(room, nomineeId);
   return "";
@@ -717,6 +747,7 @@ function startNightPhase(room) {
   room.phase = "night";
   room.confirmationResponses = new Set();
   room.confirmationChangedVoters = new Set();
+  room.confirmationResolvedVoters = new Set();
   room.defenseEndsAt = 0;
   room.pendingEliminationId = "";
   room.revealVoteCounts = false;
@@ -735,6 +766,7 @@ function resetRoomToLobby(room) {
   room.gameStarted = false;
   room.confirmationResponses = new Set();
   room.confirmationChangedVoters = new Set();
+  room.confirmationResolvedVoters = new Set();
   room.cupidLoverIds = [];
   room.defenseEndsAt = 0;
   room.lastEliminatedPlayerId = "";
@@ -896,6 +928,7 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
   room.players.delete(leavingPlayerId);
   room.confirmationResponses.delete(leavingPlayerId);
   room.confirmationChangedVoters.delete(leavingPlayerId);
+  room.confirmationResolvedVoters.delete(leavingPlayerId);
   room.readyPlayerIds.delete(leavingPlayerId);
   room.votes.delete(leavingPlayerId);
 
@@ -1875,6 +1908,7 @@ app.prepare().then(() => {
       rooms.set(roomCode, {
         confirmationResponses: new Set(),
         confirmationChangedVoters: new Set(),
+        confirmationResolvedVoters: new Set(),
         cupidLoverIds: [],
         defenseEndsAt: 0,
         gameOver: false,
@@ -2730,18 +2764,17 @@ app.prepare().then(() => {
 
       const voteCounts = setVoteSnapshot(room);
       const originalNomineeId = room.pendingEliminationId;
-      const nextNomineeId = getHighestVotedPlayerId(voteCounts);
-      const originalNomineeVotes = getVoteCountForPlayer(
+      for (const voterId of room.confirmationResponses) {
+        room.confirmationResolvedVoters.add(voterId);
+      }
+
+      const nextNomineeId = getNextDefenseNomineeId(
+        room,
         voteCounts,
         originalNomineeId,
       );
-      const nextNomineeVotes = getVoteCountForPlayer(voteCounts, nextNomineeId);
 
-      if (
-        nextNomineeId &&
-        nextNomineeId !== originalNomineeId &&
-        nextNomineeVotes > originalNomineeVotes
-      ) {
+      if (nextNomineeId) {
         startDefensePhase(room, nextNomineeId);
       } else {
         setVoteSnapshot(room);

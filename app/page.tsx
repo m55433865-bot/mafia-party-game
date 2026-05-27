@@ -282,12 +282,13 @@ export default function Home() {
             <input
               value={roomCode}
               onChange={(event) => {
-                setRoomCode(event.target.value.toUpperCase());
+                setRoomCode(event.target.value.replace(/\D/g, ""));
                 setError("");
               }}
-              className="mt-2 min-h-14 w-full rounded-2xl border border-zinc-800 bg-zinc-900 px-4 text-center text-lg font-bold uppercase tracking-[0.3em] text-white outline-none transition placeholder:tracking-normal placeholder:text-zinc-500 focus:border-red-400"
-              maxLength={6}
-              placeholder="ABC123"
+              className="mt-2 min-h-14 w-full rounded-2xl border border-zinc-800 bg-zinc-900 px-4 text-center text-3xl font-bold tracking-[0.2em] text-white outline-none transition placeholder:tracking-normal placeholder:text-zinc-500 focus:border-red-400"
+              inputMode="numeric"
+              maxLength={2}
+              placeholder="12"
               type="text"
             />
           </label>

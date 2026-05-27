@@ -1498,7 +1498,7 @@ export default function RoomPage() {
           className="mt-4 w-full rounded-2xl border border-zinc-800 bg-zinc-900 px-5 py-4 transition hover:border-red-400 active:scale-[0.98]"
           type="button"
         >
-          <span className="block text-6xl font-bold tracking-wider">
+          <span className="block text-5xl font-bold tracking-[0.2em]">
             {session.roomCode}
           </span>
           <span className="mt-2 block text-sm font-bold text-zinc-400">
