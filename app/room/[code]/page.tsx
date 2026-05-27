@@ -776,6 +776,16 @@ export default function RoomPage() {
   const cupidLoverEntries = cupidLoverIds
     .map((loverId) => getPlayer(loverId))
     .filter((player): player is Player => Boolean(player));
+  const voteResultRows = Object.entries(voteCounts)
+    .map(([targetPlayerId, count]) => ({
+      count,
+      targetPlayer: getPlayer(targetPlayerId),
+      voters: voteTargets
+        .filter((vote) => vote.targetPlayerId === targetPlayerId)
+        .map((vote) => getPlayer(vote.voterId))
+        .filter((player): player is Player => Boolean(player)),
+    }))
+    .sort((a, b) => b.count - a.count);
   const isCurrentPlayerCupidLover = cupidLoverIds.includes(socketId);
   const cupidIsInGame = Object.values(playerRoles).includes("Cupid");
   const isCurrentPlayerAlive = currentPlayer?.isHost
@@ -990,20 +1000,50 @@ export default function RoomPage() {
     });
   }
 
-  function handleEndVoting() {
-    setSelectedVote("");
-    setVoteSubmitted(false);
-    setError("");
-    socketRef.current.emit("end-voting", {
-      roomCode: session.roomCode,
-    });
-  }
-
   async function openVotingFallback() {
     await postRoomAction("/api/open-voting", {
       playerId: socketId,
       roomCode: session.roomCode,
     });
+  }
+
+  async function endVotingFallback() {
+    await postRoomAction("/api/end-voting", {
+      playerId: socketId,
+      roomCode: session.roomCode,
+    });
+  }
+
+  function handleEndVoting() {
+    setSelectedVote("");
+    setVoteSubmitted(false);
+    setError("");
+
+    if (!socketRef.current.connected) {
+      endVotingFallback().catch((error) => {
+        setError(error instanceof Error ? error.message : "Could not end voting.");
+      });
+      return;
+    }
+
+    socketRef.current.timeout(1200).emit(
+      "end-voting",
+      {
+        roomCode: session.roomCode,
+      },
+      (timeoutError: Error | null, response?: SocketAck) => {
+        if (!timeoutError && response?.ok) {
+          return;
+        }
+
+        endVotingFallback().catch((error) => {
+          setError(
+            response?.error ??
+              (error instanceof Error ? error.message : "Could not end voting."),
+          );
+        });
+      },
+    );
   }
 
   function handleOpenVoting() {
@@ -2004,8 +2044,35 @@ export default function RoomPage() {
           (isCurrentHost && ["defense", "confirmation"].includes(phase))) ? (
           <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
             <h2 className="text-xl font-bold">Vote Results</h2>
-            {voteTargets.length > 0 ? (
+            {voteResultRows.length > 0 ? (
               <div className="mt-4 flex flex-col gap-3">
+                {voteResultRows.map(({ count, targetPlayer, voters }) => (
+                  <div
+                    key={targetPlayer?.id ?? "unknown-target"}
+                    className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      {renderPlayerName(targetPlayer)}
+                      <span className="rounded-full bg-red-500/10 px-3 py-1 text-sm font-bold text-red-100">
+                        {count} {count === 1 ? "vote" : "votes"}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {voters.map((voter) => (
+                        <span
+                          key={voter.id}
+                          className="rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1 text-sm font-semibold"
+                          style={{ color: voter.color }}
+                        >
+                          {voter.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <div className="mt-2 border-t border-zinc-800 pt-3">
+                  <p className="text-sm font-bold text-zinc-400">Vote log</p>
+                </div>
               {voteTargets.map((vote) => (
                 <div
                   key={vote.voterId}

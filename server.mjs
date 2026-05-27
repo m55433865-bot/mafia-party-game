@@ -499,6 +499,28 @@ function openVotingPhase(room) {
   return "";
 }
 
+function endVotingPhase(room) {
+  if (!room || !room.gameStarted || room.gameOver || room.phase !== "day") {
+    return "Voting is not active.";
+  }
+
+  const allAlivePlayersVoted = getAliveGamePlayers(room).every((player) =>
+    room.votes.has(player.id),
+  );
+
+  if (!allAlivePlayersVoted) {
+    return "Waiting for all alive players to vote.";
+  }
+
+  const voteCounts = setVoteSnapshot(room);
+  const nomineeId = getHighestVotedPlayerId(voteCounts);
+
+  room.confirmationChangedVoters = new Set();
+  room.lastEliminatedPlayerId = "";
+  startDefensePhase(room, nomineeId);
+  return "";
+}
+
 function startDefensePhase(room, nomineeId) {
   room.confirmationResponses = new Set();
   room.defenseEndsAt = Date.now() + 30000;
@@ -1349,6 +1371,47 @@ app.prepare().then(() => {
         sendJson(res, 400, {
           ok: false,
           error: error instanceof Error ? error.message : "Could not open voting.",
+        });
+      }
+
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/end-voting") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const room = rooms.get(cleanRoomCode);
+
+        if (room?.hostId !== cleanPlayerId) {
+          sendJson(res, 403, {
+            ok: false,
+            error: "Only the host can end voting.",
+          });
+          return;
+        }
+
+        const error = endVotingPhase(room);
+
+        if (error) {
+          sendJson(res, 400, { ok: false, error });
+          return;
+        }
+
+        console.log("voting ended via http", {
+          playerId: cleanPlayerId,
+          roomCode: cleanRoomCode,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not end voting.",
         });
       }
 
@@ -2254,38 +2317,27 @@ app.prepare().then(() => {
       done?.({ ok: true });
     });
 
-    socket.on("end-voting", ({ roomCode }) => {
+    socket.on("end-voting", ({ roomCode }, done) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
 
-      if (!room || !room.gameStarted || room.gameOver || room.phase !== "day") {
-        socket.emit("error-message", "Voting is not active.");
+      if (room?.hostId !== getSocketPlayerId(socket)) {
+        const error = "Only the host can end voting.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
-      if (room.hostId !== getSocketPlayerId(socket)) {
-        socket.emit("error-message", "Only the host can end voting.");
+      const error = endVotingPhase(room);
+
+      if (error) {
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
-
-      const allAlivePlayersVoted = getAliveGamePlayers(room).every((player) =>
-        room.votes.has(player.id),
-      );
-
-      if (!allAlivePlayersVoted) {
-        socket.emit("error-message", "Waiting for all alive players to vote.");
-        return;
-      }
-
-      const voteCounts = setVoteSnapshot(room);
-
-      const nomineeId = getHighestVotedPlayerId(voteCounts);
-
-      room.confirmationChangedVoters = new Set();
-      room.lastEliminatedPlayerId = "";
-      startDefensePhase(room, nomineeId);
 
       emitRoomUpdated(io, cleanRoomCode, room);
+      done?.({ ok: true });
     });
 
     socket.on("reveal-votes", ({ roomCode }) => {
