@@ -198,6 +198,7 @@ function createEmptyRoom(hostId) {
     confirmationResponses: new Set(),
     confirmationChangedVoters: new Set(),
     confirmationResolvedVoters: new Set(),
+    confirmationVoterIds: new Set(),
     cupidLoverIds: [],
     defenseEndsAt: 0,
     gameOver: false,
@@ -485,7 +486,7 @@ function getNextDefenseNomineeId(room, voteCounts, currentNomineeId) {
   );
 }
 
-function getConfirmationVoterIds(room) {
+function calculateConfirmationVoterIds(room) {
   if (!room.pendingEliminationId) {
     return [];
   }
@@ -509,6 +510,14 @@ function getConfirmationVoterIds(room) {
       );
     })
     .map(([voterId]) => voterId);
+}
+
+function getConfirmationVoterIds(room) {
+  if (room.phase === "confirmation") {
+    return Array.from(room.confirmationVoterIds ?? []);
+  }
+
+  return calculateConfirmationVoterIds(room);
 }
 
 function setVoteSnapshot(room) {
@@ -578,6 +587,7 @@ function endVotingPhase(room) {
 
   room.confirmationChangedVoters = new Set();
   room.confirmationResolvedVoters = new Set();
+  room.confirmationVoterIds = new Set();
   room.lastEliminatedPlayerId = "";
   startDefensePhase(room, nomineeId);
   return "";
@@ -589,6 +599,7 @@ function finishDefensePhase(room) {
   }
 
   room.confirmationResponses = new Set();
+  room.confirmationVoterIds = new Set(calculateConfirmationVoterIds(room));
   room.defenseEndsAt = 0;
   room.phase = "confirmation";
   return "";
@@ -677,6 +688,7 @@ function submitBotVote(room, hostId, botPlayerId, targetPlayerId) {
 
 function startDefensePhase(room, nomineeId) {
   room.confirmationResponses = new Set();
+  room.confirmationVoterIds = new Set();
   room.defenseEndsAt = Date.now() + 30000;
   room.pendingEliminationId = nomineeId;
   room.phase = "defense";
@@ -757,6 +769,7 @@ function resetDayVotes(room) {
 
   room.phase = "day";
   room.confirmationResponses = new Set();
+  room.confirmationVoterIds = new Set();
   room.defenseEndsAt = 0;
   room.lastVoteTargets = [];
   room.nightActions = {
@@ -779,6 +792,7 @@ function startNightPhase(room) {
   room.confirmationResponses = new Set();
   room.confirmationChangedVoters = new Set();
   room.confirmationResolvedVoters = new Set();
+  room.confirmationVoterIds = new Set();
   room.defenseEndsAt = 0;
   room.pendingEliminationId = "";
   room.revealVoteCounts = false;
@@ -798,6 +812,7 @@ function resetRoomToLobby(room) {
   room.confirmationResponses = new Set();
   room.confirmationChangedVoters = new Set();
   room.confirmationResolvedVoters = new Set();
+  room.confirmationVoterIds = new Set();
   room.cupidLoverIds = [];
   room.defenseEndsAt = 0;
   room.lastEliminatedPlayerId = "";
@@ -960,6 +975,7 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
   room.confirmationResponses.delete(leavingPlayerId);
   room.confirmationChangedVoters.delete(leavingPlayerId);
   room.confirmationResolvedVoters.delete(leavingPlayerId);
+  room.confirmationVoterIds?.delete(leavingPlayerId);
   room.readyPlayerIds.delete(leavingPlayerId);
   room.votes.delete(leavingPlayerId);
 
@@ -967,6 +983,7 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
     if (votedPlayerId === leavingPlayerId) {
       room.votes.delete(voterId);
       room.confirmationResponses.delete(voterId);
+      room.confirmationVoterIds?.delete(voterId);
     }
   }
 
@@ -976,10 +993,12 @@ function removePlayerFromRoom(io, socket, rooms, { roomCode, playerId, playerNam
 
     room.pendingEliminationId = nextNomineeId;
     room.confirmationResponses = new Set();
+    room.confirmationVoterIds = new Set();
 
     if (!nextNomineeId && ["defense", "confirmation"].includes(room.phase)) {
       room.phase = "simple";
       room.confirmationResponses = new Set();
+      room.confirmationVoterIds = new Set();
       room.defenseEndsAt = 0;
       room.pendingEliminationId = "";
       room.revealVoteCounts = false;
@@ -1980,6 +1999,7 @@ app.prepare().then(() => {
         confirmationResponses: new Set(),
         confirmationChangedVoters: new Set(),
         confirmationResolvedVoters: new Set(),
+        confirmationVoterIds: new Set(),
         cupidLoverIds: [],
         defenseEndsAt: 0,
         gameOver: false,
@@ -2851,6 +2871,7 @@ app.prepare().then(() => {
       } else {
         setVoteSnapshot(room);
         room.confirmationResponses = new Set();
+        room.confirmationVoterIds = new Set();
         room.defenseEndsAt = 0;
         room.pendingEliminationId = originalNomineeId;
         room.phase = "simple-vote-results";
