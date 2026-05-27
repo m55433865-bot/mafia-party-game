@@ -569,6 +569,25 @@ function openVotingPhase(room) {
   return "";
 }
 
+function cancelVotingPhase(room) {
+  if (!room || !room.gameStarted || room.gameOver) {
+    return "Game is not active.";
+  }
+
+  room.phase = "simple";
+  room.confirmationResponses = new Set();
+  room.confirmationChangedVoters = new Set();
+  room.confirmationResolvedVoters = new Set();
+  room.confirmationVoterIds = new Set();
+  room.defenseEndsAt = 0;
+  room.lastVoteCounts = {};
+  room.lastVoteTargets = [];
+  room.pendingEliminationId = "";
+  room.revealVoteCounts = false;
+  room.votes = new Map();
+  return "";
+}
+
 function endVotingPhase(room) {
   if (!room || !room.gameStarted || room.gameOver || room.phase !== "day") {
     return "Voting is not active.";
@@ -606,6 +625,9 @@ function finishDefensePhase(room) {
     pendingEliminationId: room.pendingEliminationId,
     voterIds: Array.from(room.confirmationVoterIds),
   });
+  if (room.confirmationVoterIds.size === 0) {
+    advanceConfirmationIfReady(room);
+  }
   return "";
 }
 
@@ -656,6 +678,55 @@ function submitConfirmationVote(room, voterId, choice, targetPlayerId) {
   room.confirmationResponses.add(voterId);
   setVoteSnapshot(room);
   return "";
+}
+
+function advanceConfirmationIfReady(room) {
+  if (!room || room.phase !== "confirmation") {
+    return false;
+  }
+
+  const confirmationVoterIds = getConfirmationVoterIds(room);
+  const allConfirmationVotesSubmitted =
+    confirmationVoterIds.every((playerId) =>
+      room.confirmationResponses.has(playerId),
+    );
+
+  if (!allConfirmationVotesSubmitted) {
+    return false;
+  }
+
+  const voteCounts = setVoteSnapshot(room);
+  const originalNomineeId = room.pendingEliminationId;
+
+  for (const voterId of confirmationVoterIds) {
+    room.confirmationResolvedVoters.add(voterId);
+  }
+
+  const nextNomineeId = getNextDefenseNomineeId(
+    room,
+    voteCounts,
+    originalNomineeId,
+  );
+
+  if (nextNomineeId) {
+    console.log("confirmation complete, next defense started", {
+      nextNomineeId,
+      originalNomineeId,
+    });
+    startDefensePhase(room, nextNomineeId);
+    return true;
+  }
+
+  room.confirmationResponses = new Set();
+  room.confirmationVoterIds = new Set();
+  room.defenseEndsAt = 0;
+  room.pendingEliminationId = originalNomineeId;
+  room.phase = "simple-vote-results";
+  room.revealVoteCounts = false;
+  console.log("confirmation complete, vote results ready", {
+    originalNomineeId,
+  });
+  return true;
 }
 
 function submitBotVote(room, hostId, botPlayerId, targetPlayerId) {
@@ -1679,6 +1750,47 @@ app.prepare().then(() => {
       return;
     }
 
+    if (req.method === "POST" && requestUrl.pathname === "/api/cancel-voting") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const room = rooms.get(cleanRoomCode);
+
+        if (room?.hostId !== cleanPlayerId) {
+          sendJson(res, 403, {
+            ok: false,
+            error: "Only the moderator can cancel voting.",
+          });
+          return;
+        }
+
+        const error = cancelVotingPhase(room);
+
+        if (error) {
+          sendJson(res, 400, { ok: false, error });
+          return;
+        }
+
+        console.log("voting cancelled via http", {
+          playerId: cleanPlayerId,
+          roomCode: cleanRoomCode,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not cancel voting.",
+        });
+      }
+
+      return;
+    }
+
     if (req.method === "POST" && requestUrl.pathname === "/api/defense-done") {
       try {
         const body = await readJsonBody(req);
@@ -1746,6 +1858,7 @@ app.prepare().then(() => {
           roomCode: cleanRoomCode,
           targetPlayerId: cleanTargetPlayerId,
         });
+        advanceConfirmationIfReady(room);
         emitRoomUpdated(io, cleanRoomCode, room);
         sendJson(res, 200, {
           ok: true,
@@ -1804,6 +1917,7 @@ app.prepare().then(() => {
           roomCode: cleanRoomCode,
           targetPlayerId: cleanTargetPlayerId,
         });
+        advanceConfirmationIfReady(room);
         emitRoomUpdated(io, cleanRoomCode, room);
         sendJson(res, 200, {
           ok: true,
@@ -2715,6 +2829,33 @@ app.prepare().then(() => {
       done?.({ ok: true });
     });
 
+    socket.on("cancel-voting", ({ roomCode }, done) => {
+      const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
+      const room = rooms.get(cleanRoomCode);
+
+      if (room?.hostId !== getSocketPlayerId(socket)) {
+        const error = "Only the moderator can cancel voting.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
+        return;
+      }
+
+      const error = cancelVotingPhase(room);
+
+      if (error) {
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
+        return;
+      }
+
+      console.log("voting cancelled via socket", {
+        playerId: getSocketPlayerId(socket),
+        roomCode: cleanRoomCode,
+      });
+      emitRoomUpdated(io, cleanRoomCode, room);
+      done?.({ ok: true });
+    });
+
     socket.on("reveal-votes", ({ roomCode }) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
@@ -2752,11 +2893,7 @@ app.prepare().then(() => {
         return;
       }
 
-      room.phase = "simple";
-      room.votes = new Map();
-      room.lastVoteCounts = {};
-      room.lastVoteTargets = [];
-      room.revealVoteCounts = false;
+      cancelVotingPhase(room);
       emitRoomUpdated(io, cleanRoomCode, room);
     });
 
@@ -2830,6 +2967,7 @@ app.prepare().then(() => {
         return;
       }
 
+      advanceConfirmationIfReady(room);
       emitRoomUpdated(io, cleanRoomCode, room);
       done?.({ ok: true });
     });
@@ -2848,38 +2986,9 @@ app.prepare().then(() => {
         return;
       }
 
-      const confirmationVoterIds = getConfirmationVoterIds(room);
-      const allConfirmationVotesSubmitted = confirmationVoterIds.every((playerId) =>
-        room.confirmationResponses.has(playerId),
-      );
-
-      if (!allConfirmationVotesSubmitted) {
+      if (!advanceConfirmationIfReady(room)) {
         socket.emit("error-message", "Waiting for confirmation votes.");
         return;
-      }
-
-      const voteCounts = setVoteSnapshot(room);
-      const originalNomineeId = room.pendingEliminationId;
-      for (const voterId of room.confirmationResponses) {
-        room.confirmationResolvedVoters.add(voterId);
-      }
-
-      const nextNomineeId = getNextDefenseNomineeId(
-        room,
-        voteCounts,
-        originalNomineeId,
-      );
-
-      if (nextNomineeId) {
-        startDefensePhase(room, nextNomineeId);
-      } else {
-        setVoteSnapshot(room);
-        room.confirmationResponses = new Set();
-        room.confirmationVoterIds = new Set();
-        room.defenseEndsAt = 0;
-        room.pendingEliminationId = originalNomineeId;
-        room.phase = "simple-vote-results";
-        room.revealVoteCounts = false;
       }
 
       emitRoomUpdated(io, cleanRoomCode, room);

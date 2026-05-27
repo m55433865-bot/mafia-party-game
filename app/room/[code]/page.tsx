@@ -1086,6 +1086,61 @@ export default function RoomPage() {
     });
   }
 
+  async function cancelVotingFallback() {
+    await postRoomAction("/api/cancel-voting", {
+      playerId: socketId,
+      roomCode: session.roomCode,
+    });
+  }
+
+  function applyLocalVotingReset() {
+    setAllAlivePlayersVoted(false);
+    setConfirmationResponses([]);
+    setConfirmationVoterIds([]);
+    setDefenseEndsAt(0);
+    setPendingEliminationId("");
+    setPhase("simple");
+    setRevealVoteCounts(false);
+    setSelectedBotVoterId("");
+    setSelectedConfirmationTarget("");
+    setSelectedVote("");
+    setVoteCounts({});
+    setVoteSubmitted(false);
+    setVoteTargets([]);
+    setVotingStatus({});
+  }
+
+  function handleCancelVoting() {
+    setError("");
+    applyLocalVotingReset();
+
+    if (!socketRef.current.connected) {
+      cancelVotingFallback().catch((error) => {
+        setError(error instanceof Error ? error.message : "Could not cancel voting.");
+      });
+      return;
+    }
+
+    socketRef.current.timeout(1200).emit(
+      "cancel-voting",
+      {
+        roomCode: session.roomCode,
+      },
+      (timeoutError: Error | null, response?: SocketAck) => {
+        if (!timeoutError && response?.ok) {
+          return;
+        }
+
+        cancelVotingFallback().catch((error) => {
+          setError(
+            response?.error ??
+              (error instanceof Error ? error.message : "Could not cancel voting."),
+          );
+        });
+      },
+    );
+  }
+
   function handleEndVoting() {
     setSelectedVote("");
     setVoteSubmitted(false);
@@ -1312,13 +1367,6 @@ export default function RoomPage() {
         error instanceof Error ? error.message : "Could not submit bot defense vote.",
       );
     }
-  }
-
-  function handleFinishConfirmation() {
-    setError("");
-    socketRef.current.emit("finish-confirmation", {
-      roomCode: session.roomCode,
-    });
   }
 
   function applyLocalLobbyReset() {
@@ -2380,21 +2428,11 @@ export default function RoomPage() {
             ) : null}
 
             {isCurrentHost ? (
-              <>
-                <button
-                  onClick={handleFinishConfirmation}
-                  disabled={!allConfirmationVotesSubmitted}
-                  className="mt-4 min-h-14 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 text-base font-bold text-zinc-100 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:text-zinc-500"
-                  type="button"
-                >
-                  Show Result
-                </button>
-                <p className="mt-3 text-sm text-zinc-400">
-                  {allConfirmationVotesSubmitted
-                    ? "Ready to show the result"
-                    : "Waiting for confirmation votes..."}
-                </p>
-              </>
+              <p className="mt-3 text-sm text-zinc-400">
+                {allConfirmationVotesSubmitted
+                  ? "Confirmation complete"
+                  : "Waiting for confirmation votes..."}
+              </p>
             ) : null}
           </div>
         ) : null}
@@ -2541,6 +2579,18 @@ export default function RoomPage() {
                   Delete Vote Results
                 </button>
               </>
+            ) : null}
+            {!gameOver &&
+            ["day", "defense", "confirmation", "simple-vote-results"].includes(
+              phase,
+            ) ? (
+              <button
+                onClick={handleCancelVoting}
+                className="min-h-16 w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-6 text-lg font-bold text-zinc-100 transition hover:border-zinc-500 hover:bg-zinc-900 active:scale-[0.98]"
+                type="button"
+              >
+                Cancel Voting
+              </button>
             ) : null}
             {gameOver ? (
               <button
