@@ -512,9 +512,33 @@ function calculateConfirmationVoterIds(room) {
     .map(([voterId]) => voterId);
 }
 
+function getPendingNomineeVoterIds(room) {
+  if (!room.pendingEliminationId) {
+    return [];
+  }
+
+  return Array.from(room.votes.entries())
+    .filter(([voterId, targetPlayerId]) => {
+      const voter = room.players.get(voterId);
+
+      return (
+        targetPlayerId === room.pendingEliminationId &&
+        voter?.alive &&
+        !voter.isHost &&
+        !room.confirmationResolvedVoters.has(voterId)
+      );
+    })
+    .map(([voterId]) => voterId);
+}
+
 function getConfirmationVoterIds(room) {
   if (room.phase === "confirmation") {
-    return Array.from(room.confirmationVoterIds ?? []);
+    return Array.from(
+      new Set([
+        ...Array.from(room.confirmationVoterIds ?? []),
+        ...getPendingNomineeVoterIds(room),
+      ]),
+    );
   }
 
   return calculateConfirmationVoterIds(room);
@@ -599,9 +623,16 @@ function finishDefensePhase(room) {
   }
 
   room.confirmationResponses = new Set();
-  room.confirmationVoterIds = new Set(calculateConfirmationVoterIds(room));
+  room.confirmationVoterIds = new Set([
+    ...calculateConfirmationVoterIds(room),
+    ...getPendingNomineeVoterIds(room),
+  ]);
   room.defenseEndsAt = 0;
   room.phase = "confirmation";
+  console.log("confirmation voters locked", {
+    pendingEliminationId: room.pendingEliminationId,
+    voterIds: Array.from(room.confirmationVoterIds),
+  });
   return "";
 }
 
