@@ -763,6 +763,8 @@ export default function RoomPage() {
       .map((player) => player.icon),
   );
   const currentPlayerHasProfilePhoto = Boolean(currentPlayer?.avatarUrl);
+  const canSeePlayerListRoles =
+    gameStarted && !isCurrentHost && Boolean(currentPlayer && !currentPlayer.alive);
   const roleCountMatchesPlayers = selectedRoles.length === gamePlayers.length;
   const canStartGame = isCurrentHost && roleCountMatchesPlayers;
   const assignedRoleEntries = gamePlayers.map((player) => ({
@@ -792,6 +794,9 @@ export default function RoomPage() {
         .filter((player): player is Player => Boolean(player)),
     }))
     .sort((a, b) => b.count - a.count);
+  const pendingEliminationVoteCount = pendingEliminationId
+    ? Number(voteCounts[pendingEliminationId] ?? 0)
+    : 0;
   const isCurrentPlayerCupidLover = cupidLoverIds.includes(socketId);
   const cupidIsInGame = Object.values(playerRoles).includes("Cupid");
   const isCurrentPlayerAlive = currentPlayer?.isHost
@@ -1987,7 +1992,17 @@ export default function RoomPage() {
           <h2 className="text-xl font-bold">Players</h2>
 
           <div className="mt-4 flex flex-col gap-3">
-            {currentPlayers.map((player) => (
+            {currentPlayers.map((player) => {
+              const playerListBadge =
+                canSeePlayerListRoles && !player.isHost
+                  ? getRoleCard(playerRoles[player.id] ?? "Villager").title
+                  : player.isHost
+                    ? "Host"
+                    : player.isBot
+                      ? "Bot"
+                      : "Player";
+
+              return (
               <div
                 key={player.id}
                 className={`player-row flex items-center justify-between rounded-xl bg-zinc-950 px-4 py-3 ${
@@ -2012,7 +2027,7 @@ export default function RoomPage() {
                     </span>
                   ) : null}
                   <span className="rounded-full bg-red-500/10 px-3 py-1 text-sm font-medium text-red-200">
-                    {player.isHost ? "Host" : player.isBot ? "Bot" : "Player"}
+                    {playerListBadge}
                   </span>
                   {gameStarted && isCurrentHost && !player.isHost ? (
                     <button
@@ -2030,7 +2045,8 @@ export default function RoomPage() {
                   ) : null}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -2159,8 +2175,11 @@ export default function RoomPage() {
             </p>
             <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-4 text-center">
               {pendingEliminationPlayer ? (
-                <div className="flex justify-center">
+                <div className="flex flex-wrap items-center justify-center gap-3">
                   {renderPlayerName(pendingEliminationPlayer)}
+                  <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-sm font-bold text-red-100">
+                    Votes = {pendingEliminationVoteCount}
+                  </span>
                 </div>
               ) : null}
               <button
@@ -2192,17 +2211,22 @@ export default function RoomPage() {
           <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
             <h2 className="text-xl font-bold">Defense Vote</h2>
             <p className="mt-1 text-sm text-zinc-400">
-              Only players who voted for {pendingEliminationPlayer?.name ?? "the suspect"} can submit their original vote or revote once.
+              Players who voted for the current top suspect can submit their original vote or revote once.
             </p>
 
             {pendingEliminationPlayer ? (
               <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3">
-                {renderPlayerName(pendingEliminationPlayer)}
-                {confirmationResponses.length > 0 ? (
-                  <p className="mt-2 text-sm font-bold text-emerald-100">
-                    {confirmationResponses.length}/{confirmationVoterIds.length} defense submitted
-                  </p>
-                ) : null}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  {renderPlayerName(pendingEliminationPlayer)}
+                  <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-sm font-bold text-red-100">
+                    Votes = {pendingEliminationVoteCount}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm font-bold text-emerald-100">
+                  {allConfirmationVotesSubmitted
+                    ? `Final votes = ${pendingEliminationVoteCount}`
+                    : `${confirmationResponses.length}/${confirmationVoterIds.length} defense submitted`}
+                </p>
               </div>
             ) : null}
 

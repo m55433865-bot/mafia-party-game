@@ -311,10 +311,16 @@ function formatRoom(roomCode, room, viewerId = "") {
   const votingStatus = {};
   const alivePlayers = getAliveGamePlayers(room);
   const confirmationVoterIds = getConfirmationVoterIds(room);
+  const viewerPlayer = room.players.get(viewerId);
+  const canSeeAllRoles =
+    viewerId === room.hostId ||
+    (room.gameStarted && viewerPlayer && !viewerPlayer.isHost && !viewerPlayer.alive);
   const canSeeVoteResults =
     room.revealVoteCounts ||
     (["defense", "confirmation", "simple-vote-results"].includes(room.phase) &&
       viewerId === room.hostId);
+  const canSeeVoteCounts =
+    canSeeVoteResults || ["defense", "confirmation"].includes(room.phase);
   const viewerRole = room.roles.get(viewerId);
   const canSeeMafiaRoles = isMafiaRole(viewerRole);
   const canSeeCupidLovers =
@@ -364,7 +370,7 @@ function formatRoom(roomCode, room, viewerId = "") {
         ? "Moderator"
         : viewerRole ?? "",
     playerRoles:
-      viewerId === room.hostId
+      canSeeAllRoles
         ? Object.fromEntries(room.roles.entries())
         : canSeeMafiaRoles
           ? Object.fromEntries(
@@ -375,7 +381,7 @@ function formatRoom(roomCode, room, viewerId = "") {
         : {},
     selectedRoles: room.selectedRoles,
     voteTargets: canSeeVoteResults ? room.lastVoteTargets : [],
-    voteCounts: canSeeVoteResults ? room.lastVoteCounts : {},
+    voteCounts: canSeeVoteCounts ? room.lastVoteCounts : {},
     votingStatus,
     winner: room.winner,
   };
