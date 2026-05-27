@@ -2186,16 +2186,24 @@ export default function RoomPage() {
           <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
             <h2 className="text-xl font-bold">Defense Phase</h2>
             <p className="mt-1 text-sm text-zinc-400">
-              {pendingEliminationPlayer?.name ?? "The nominated player"} defends
-              for 30 seconds in real life.
+              {finalTopVoteRows.length > 1
+                ? "Tied players defend for 30 seconds in real life."
+                : `${pendingEliminationPlayer?.name ?? "The nominated player"} defends for 30 seconds in real life.`}
             </p>
             <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-4 text-center">
-              {pendingEliminationPlayer ? (
-                <div className="flex flex-wrap items-center justify-center gap-3">
-                  {renderPlayerName(pendingEliminationPlayer)}
-                  <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-sm font-bold text-red-100">
-                    Votes = {pendingEliminationVoteCount}
-                  </span>
+              {finalTopVoteRows.length > 0 ? (
+                <div className="flex flex-col items-stretch gap-3">
+                  {finalTopVoteRows.map(({ count, player }) => (
+                    <div
+                      key={player.id}
+                      className="flex flex-wrap items-center justify-center gap-3"
+                    >
+                      {renderPlayerName(player)}
+                      <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-sm font-bold text-red-100">
+                        Votes = {count}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               ) : null}
               <button
