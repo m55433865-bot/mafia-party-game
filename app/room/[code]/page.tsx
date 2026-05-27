@@ -982,22 +982,67 @@ export default function RoomPage() {
       return;
     }
 
+    const botVoterId = selectedBotVoterId;
     setError("");
-    socketRef.current.timeout(5000).emit("moderator-bot-vote", {
-      botPlayerId: selectedBotVoterId,
-      playerId: socketId,
-      roomCode: session.roomCode,
-      targetPlayerId,
-    }, (timeoutError: Error | null, response?: SocketAck) => {
-      if (timeoutError) {
-        setError("Bot vote request timed out. Restart or redeploy the server.");
-        return;
-      }
+    setVotingStatus((currentStatus) => ({
+      ...currentStatus,
+      [botVoterId]: true,
+    }));
+    setVoteTargets((currentTargets) => [
+      ...currentTargets.filter((vote) => vote.voterId !== botVoterId),
+      { targetPlayerId, voterId: botVoterId },
+    ]);
 
-      if (!response?.ok) {
-        setError(response?.error ?? "Could not submit bot vote.");
-      }
-    });
+    const submitBotVoteFallback = () =>
+      postRoomAction("/api/bot-vote", {
+        botPlayerId: botVoterId,
+        playerId: socketId,
+        roomCode: session.roomCode,
+        targetPlayerId,
+      });
+
+    if (!socketRef.current.connected) {
+      submitBotVoteFallback().catch((error) => {
+        setVotingStatus((currentStatus) => ({
+          ...currentStatus,
+          [botVoterId]: false,
+        }));
+        setVoteTargets((currentTargets) =>
+          currentTargets.filter((vote) => vote.voterId !== botVoterId),
+        );
+        setError(error instanceof Error ? error.message : "Could not submit bot vote.");
+      });
+      return;
+    }
+
+    socketRef.current.timeout(1200).emit(
+      "moderator-bot-vote",
+      {
+        botPlayerId: botVoterId,
+        playerId: socketId,
+        roomCode: session.roomCode,
+        targetPlayerId,
+      },
+      (timeoutError: Error | null, response?: SocketAck) => {
+        if (!timeoutError && response?.ok) {
+          return;
+        }
+
+        submitBotVoteFallback().catch((error) => {
+          setVotingStatus((currentStatus) => ({
+            ...currentStatus,
+            [botVoterId]: false,
+          }));
+          setVoteTargets((currentTargets) =>
+            currentTargets.filter((vote) => vote.voterId !== botVoterId),
+          );
+          setError(
+            response?.error ??
+              (error instanceof Error ? error.message : "Could not submit bot vote."),
+          );
+        });
+      },
+    );
   }
 
   async function openVotingFallback() {

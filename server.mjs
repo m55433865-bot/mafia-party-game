@@ -582,6 +582,38 @@ function submitConfirmationVote(room, voterId, choice, targetPlayerId) {
   return "";
 }
 
+function submitBotVote(room, hostId, botPlayerId, targetPlayerId) {
+  if (!room || !room.gameStarted || room.gameOver || room.phase !== "day") {
+    return "Voting is not active.";
+  }
+
+  if (room.hostId !== hostId) {
+    return "Only the moderator can vote for bots.";
+  }
+
+  const botPlayer = room.players.get(botPlayerId);
+  const targetPlayer = room.players.get(targetPlayerId);
+
+  if (!botPlayer || !botPlayer.isBot || !targetPlayer || targetPlayer.isHost) {
+    return "Player not found.";
+  }
+
+  if (!botPlayer.alive) {
+    return "Dead bots cannot vote.";
+  }
+
+  if (!targetPlayer.alive) {
+    return "Bots can only vote for alive players.";
+  }
+
+  if (botPlayer.id === targetPlayer.id) {
+    return "A bot cannot vote for itself.";
+  }
+
+  room.votes.set(botPlayer.id, targetPlayer.id);
+  return "";
+}
+
 function startDefensePhase(room, nomineeId) {
   room.confirmationResponses = new Set();
   room.defenseEndsAt = Date.now() + 30000;
@@ -1391,6 +1423,47 @@ app.prepare().then(() => {
         sendJson(res, 400, {
           ok: false,
           error: error instanceof Error ? error.message : "Could not submit vote.",
+        });
+      }
+
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/bot-vote") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const cleanBotPlayerId = String(body.botPlayerId ?? "").trim();
+        const cleanTargetPlayerId = String(body.targetPlayerId ?? "").trim();
+        const room = rooms.get(cleanRoomCode);
+        const error = submitBotVote(
+          room,
+          cleanPlayerId,
+          cleanBotPlayerId,
+          cleanTargetPlayerId,
+        );
+
+        if (error) {
+          sendJson(res, 400, { ok: false, error });
+          return;
+        }
+
+        console.log("bot vote submitted via http", {
+          botPlayerId: cleanBotPlayerId,
+          playerId: cleanPlayerId,
+          roomCode: cleanRoomCode,
+          targetPlayerId: cleanTargetPlayerId,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not submit bot vote.",
         });
       }
 
@@ -2382,56 +2455,25 @@ app.prepare().then(() => {
       const cleanTargetPlayerId = String(targetPlayerId ?? "").trim();
       const cleanPlayerId = String(playerId ?? getSocketPlayerId(socket)).trim();
       const room = rooms.get(cleanRoomCode);
-      const fail = (error) => {
+      const error = submitBotVote(
+        room,
+        cleanPlayerId,
+        cleanBotPlayerId,
+        cleanTargetPlayerId,
+      );
+
+      if (error) {
         socket.emit("error-message", error);
         done?.({ ok: false, error });
-      };
-
-      if (!room || !room.gameStarted || room.gameOver || room.phase !== "day") {
-        fail("Voting is not active.");
-        return;
-      }
-
-      if (room.hostId !== cleanPlayerId) {
-        fail("Only the moderator can vote for bots.");
-        return;
-      }
-
-      const botPlayer = room.players.get(cleanBotPlayerId);
-      const targetPlayer = room.players.get(cleanTargetPlayerId);
-
-      if (
-        !botPlayer ||
-        !botPlayer.isBot ||
-        !targetPlayer ||
-        targetPlayer.isHost
-      ) {
-        fail("Player not found.");
-        return;
-      }
-
-      if (!botPlayer.alive) {
-        fail("Dead bots cannot vote.");
-        return;
-      }
-
-      if (!targetPlayer.alive) {
-        fail("Bots can only vote for alive players.");
-        return;
-      }
-
-      if (botPlayer.id === targetPlayer.id) {
-        fail("A bot cannot vote for itself.");
         return;
       }
 
       socket.data.playerId = cleanPlayerId;
       socket.data.roomCode = cleanRoomCode;
-      room.votes.set(botPlayer.id, targetPlayer.id);
       console.log("bot vote submitted", {
-        botPlayerId: botPlayer.id,
+        botPlayerId: cleanBotPlayerId,
         roomCode: cleanRoomCode,
-        targetPlayerId: targetPlayer.id,
+        targetPlayerId: cleanTargetPlayerId,
       });
       emitRoomUpdated(io, cleanRoomCode, room);
       done?.({ ok: true });
