@@ -1428,6 +1428,46 @@ app.prepare().then(() => {
       return;
     }
 
+    if (req.method === "POST" && requestUrl.pathname === "/api/cancel-game") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const room = rooms.get(cleanRoomCode);
+
+        if (!room) {
+          sendJson(res, 404, { ok: false, error: "Room does not exist." });
+          return;
+        }
+
+        if (room.hostId !== cleanPlayerId) {
+          sendJson(res, 403, {
+            ok: false,
+            error: "Only the host can cancel the game.",
+          });
+          return;
+        }
+
+        resetRoomToLobby(room);
+        console.log("game cancelled via http", {
+          playerId: cleanPlayerId,
+          roomCode: cleanRoomCode,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not cancel game.",
+        });
+      }
+
+      return;
+    }
+
     if (req.method === "POST" && requestUrl.pathname === "/api/vote-player") {
       try {
         const body = await readJsonBody(req);
@@ -2395,28 +2435,29 @@ app.prepare().then(() => {
       emitRoomUpdated(io, cleanRoomCode, room);
     });
 
-    socket.on("cancel-game", ({ roomCode }) => {
+    socket.on("cancel-game", ({ roomCode }, done) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
 
       if (!room) {
         socket.emit("error-message", "Room does not exist.");
+        done?.({ ok: false, error: "Room does not exist." });
         return;
       }
 
       if (room.hostId !== getSocketPlayerId(socket)) {
         socket.emit("error-message", "Only the host can cancel the game.");
+        done?.({ ok: false, error: "Only the host can cancel the game." });
         return;
       }
 
       resetRoomToLobby(room);
-      emitRoomUpdated(io, cleanRoomCode, room);
-      done?.({
-        isHost: player.isHost,
-        ok: true,
-        restored: false,
+      console.log("game cancelled via socket", {
+        playerId: getSocketPlayerId(socket),
         roomCode: cleanRoomCode,
       });
+      emitRoomUpdated(io, cleanRoomCode, room);
+      done?.({ ok: true });
     });
 
     socket.on("set-cupid-lovers", ({ roomCode, loverIds }) => {

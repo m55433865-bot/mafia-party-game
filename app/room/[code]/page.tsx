@@ -1300,13 +1300,74 @@ export default function RoomPage() {
     });
   }
 
-  function handleCancelGame() {
+  function applyLocalLobbyReset() {
+    setAllAlivePlayersVoted(false);
+    setConfirmationResponses([]);
+    setConfirmationVoterIds([]);
+    setCupidLoverIds([]);
+    setDefenseEndsAt(0);
+    setGameOver(false);
+    setGameStarted(false);
+    setLastEliminatedPlayerId("");
+    setNightResultMessage("");
+    setPendingEliminationId("");
+    setPhase("lobby");
+    setPlayerRoles({});
+    setRevealVoteCounts(false);
+    setRole("");
+    setRoleCardVisible(true);
+    setSelectedBotVoterId("");
+    setSelectedConfirmationTarget("");
     setSelectedVote("");
+    setVoteCounts({});
     setVoteSubmitted(false);
-    setError("");
-    socketRef.current.emit("cancel-game", {
+    setVoteTargets([]);
+    setVotingStatus({});
+    setWinner("");
+    setPlayers((currentPlayers) =>
+      currentPlayers.map((player) => ({
+        ...player,
+        alive: !player.isHost,
+      })),
+    );
+  }
+
+  async function cancelGameFallback() {
+    await postRoomAction("/api/cancel-game", {
+      playerId: socketId,
       roomCode: session.roomCode,
     });
+  }
+
+  function handleCancelGame() {
+    setError("");
+    applyLocalLobbyReset();
+
+    if (!socketRef.current.connected) {
+      cancelGameFallback().catch((error) => {
+        setError(error instanceof Error ? error.message : "Could not cancel game.");
+      });
+      return;
+    }
+
+    socketRef.current.timeout(1200).emit(
+      "cancel-game",
+      {
+        roomCode: session.roomCode,
+      },
+      (timeoutError: Error | null, response?: SocketAck) => {
+        if (!timeoutError && response?.ok) {
+          return;
+        }
+
+        cancelGameFallback().catch((error) => {
+          setError(
+            response?.error ??
+              (error instanceof Error ? error.message : "Could not cancel game."),
+          );
+        });
+      },
+    );
   }
 
   function handleReturnToLobby() {
