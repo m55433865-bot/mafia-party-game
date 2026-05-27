@@ -1634,6 +1634,66 @@ app.prepare().then(() => {
       return;
     }
 
+    if (req.method === "POST" && requestUrl.pathname === "/api/bot-confirmation-vote") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const cleanBotPlayerId = String(body.botPlayerId ?? "").trim();
+        const cleanChoice = String(body.choice ?? "").trim();
+        const cleanTargetPlayerId = String(body.targetPlayerId ?? "").trim();
+        const room = rooms.get(cleanRoomCode);
+        const botPlayer = room?.players.get(cleanBotPlayerId);
+
+        if (room?.hostId !== cleanPlayerId) {
+          sendJson(res, 403, {
+            ok: false,
+            error: "Only the moderator can vote for bots.",
+          });
+          return;
+        }
+
+        if (!botPlayer?.isBot) {
+          sendJson(res, 400, { ok: false, error: "Choose a bot voter." });
+          return;
+        }
+
+        const error = submitConfirmationVote(
+          room,
+          cleanBotPlayerId,
+          cleanChoice,
+          cleanTargetPlayerId,
+        );
+
+        if (error) {
+          sendJson(res, 400, { ok: false, error });
+          return;
+        }
+
+        console.log("bot defense vote submitted via http", {
+          botPlayerId: cleanBotPlayerId,
+          choice: cleanChoice,
+          playerId: cleanPlayerId,
+          roomCode: cleanRoomCode,
+          targetPlayerId: cleanTargetPlayerId,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error
+            ? error.message
+            : "Could not submit bot defense vote.",
+        });
+      }
+
+      return;
+    }
+
     if (req.method === "POST" && requestUrl.pathname === "/api/set-cupid-lovers") {
       try {
         const body = await readJsonBody(req);

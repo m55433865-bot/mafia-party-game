@@ -736,6 +736,12 @@ export default function RoomPage() {
   const pendingEliminationPlayer = getPlayer(pendingEliminationId);
   const isConfirmationVoter = confirmationVoterIds.includes(socketId);
   const hasSubmittedConfirmation = confirmationResponses.includes(socketId);
+  const pendingBotConfirmationVoters = confirmationVoterIds
+    .map((playerId) => getPlayer(playerId))
+    .filter(
+      (player): player is Player =>
+        Boolean(player?.isBot) && !confirmationResponses.includes(player?.id ?? ""),
+    );
   const allConfirmationVotesSubmitted =
     confirmationVoterIds.every((playerId) =>
       confirmationResponses.includes(playerId),
@@ -1255,6 +1261,36 @@ export default function RoomPage() {
   function handleChangeConfirmationVote(targetPlayerId: string) {
     setSelectedConfirmationTarget(targetPlayerId);
     submitConfirmationChoice("change", targetPlayerId);
+  }
+
+  async function handleBotConfirmationVote(
+    botPlayerId: string,
+    choice: "keep" | "change",
+    targetPlayerId = "",
+  ) {
+    setError("");
+    setConfirmationResponses((currentResponses) =>
+      currentResponses.includes(botPlayerId)
+        ? currentResponses
+        : [...currentResponses, botPlayerId],
+    );
+
+    try {
+      await postRoomAction("/api/bot-confirmation-vote", {
+        botPlayerId,
+        choice,
+        playerId: socketId,
+        roomCode: session.roomCode,
+        targetPlayerId,
+      });
+    } catch (error) {
+      setConfirmationResponses((currentResponses) =>
+        currentResponses.filter((playerId) => playerId !== botPlayerId),
+      );
+      setError(
+        error instanceof Error ? error.message : "Could not submit bot defense vote.",
+      );
+    }
   }
 
   function handleFinishConfirmation() {
@@ -2160,6 +2196,62 @@ export default function RoomPage() {
               <p className="mt-4 text-sm text-zinc-400">
                 Waiting for the confirmation voters.
               </p>
+            ) : null}
+
+            {isCurrentHost && pendingBotConfirmationVoters.length > 0 ? (
+              <div className="mt-5 border-t border-zinc-800 pt-5">
+                <p className="text-sm font-bold text-zinc-200">
+                  Bot defense votes
+                </p>
+                <div className="mt-3 flex flex-col gap-4">
+                  {pendingBotConfirmationVoters.map((botPlayer) => (
+                    <div
+                      key={botPlayer.id}
+                      className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        {renderPlayerName(botPlayer)}
+                        <button
+                          onClick={() =>
+                            handleBotConfirmationVote(botPlayer.id, "keep")
+                          }
+                          className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-sm font-bold text-emerald-100"
+                          type="button"
+                        >
+                          Submit original
+                        </button>
+                      </div>
+                      <div className="mt-3 flex flex-col gap-2">
+                        {alivePlayers
+                          .filter(
+                            (player) =>
+                              player.id !== botPlayer.id &&
+                              player.id !== pendingEliminationId,
+                          )
+                          .map((player) => (
+                            <button
+                              key={player.id}
+                              onClick={() =>
+                                handleBotConfirmationVote(
+                                  botPlayer.id,
+                                  "change",
+                                  player.id,
+                                )
+                              }
+                              className="flex min-h-12 items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-left transition hover:border-zinc-600"
+                              type="button"
+                            >
+                              {renderPlayerName(player)}
+                              <span className="text-sm font-bold text-red-200">
+                                Bot revote
+                              </span>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             ) : null}
 
             {isCurrentHost ? (
