@@ -797,6 +797,22 @@ export default function RoomPage() {
   const pendingEliminationVoteCount = pendingEliminationId
     ? Number(voteCounts[pendingEliminationId] ?? 0)
     : 0;
+  const highestFinalVoteCount = Math.max(
+    0,
+    ...Object.values(voteCounts).map((count) => Number(count) || 0),
+  );
+  const finalTopVoteRows =
+    highestFinalVoteCount > 0
+      ? Object.entries(voteCounts)
+          .filter(([, count]) => Number(count) === highestFinalVoteCount)
+          .map(([playerId, count]) => ({
+            count: Number(count),
+            player: getPlayer(playerId),
+          }))
+          .filter((row): row is { count: number; player: Player } =>
+            Boolean(row.player),
+          )
+      : [];
   const isCurrentPlayerCupidLover = cupidLoverIds.includes(socketId);
   const cupidIsInGame = Object.values(playerRoles).includes("Cupid");
   const isCurrentPlayerAlive = currentPlayer?.isHost
@@ -2216,17 +2232,33 @@ export default function RoomPage() {
 
             {pendingEliminationPlayer ? (
               <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  {renderPlayerName(pendingEliminationPlayer)}
-                  <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-sm font-bold text-red-100">
-                    Votes = {pendingEliminationVoteCount}
-                  </span>
-                </div>
-                <p className="mt-2 text-sm font-bold text-emerald-100">
-                  {allConfirmationVotesSubmitted
-                    ? `Final votes = ${pendingEliminationVoteCount}`
-                    : `${confirmationResponses.length}/${confirmationVoterIds.length} defense submitted`}
-                </p>
+                {allConfirmationVotesSubmitted && finalTopVoteRows.length > 0 ? (
+                  <div className="flex flex-col gap-3">
+                    {finalTopVoteRows.map(({ count, player }) => (
+                      <div
+                        key={player.id}
+                        className="flex flex-wrap items-center justify-between gap-3"
+                      >
+                        {renderPlayerName(player)}
+                        <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-sm font-bold text-red-100">
+                          Final votes = {count}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      {renderPlayerName(pendingEliminationPlayer)}
+                      <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-sm font-bold text-red-100">
+                        Votes = {pendingEliminationVoteCount}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm font-bold text-emerald-100">
+                      {confirmationResponses.length}/{confirmationVoterIds.length} defense submitted
+                    </p>
+                  </>
+                )}
               </div>
             ) : null}
 
