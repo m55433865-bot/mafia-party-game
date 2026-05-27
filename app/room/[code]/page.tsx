@@ -1100,30 +1100,116 @@ export default function RoomPage() {
     });
   }
 
-  function handleDefenseDone() {
-    setError("");
-    socketRef.current.emit("defense-done", {
+  async function defenseDoneFallback() {
+    await postRoomAction("/api/defense-done", {
+      playerId: socketId,
       roomCode: session.roomCode,
     });
+  }
+
+  function handleDefenseDone() {
+    setError("");
+    setPhase("confirmation");
+
+    if (!socketRef.current.connected) {
+      defenseDoneFallback().catch((error) => {
+        setPhase("defense");
+        setError(error instanceof Error ? error.message : "Could not finish defense.");
+      });
+      return;
+    }
+
+    socketRef.current.timeout(1200).emit(
+      "defense-done",
+      {
+        roomCode: session.roomCode,
+      },
+      (timeoutError: Error | null, response?: SocketAck) => {
+        if (!timeoutError && response?.ok) {
+          return;
+        }
+
+        defenseDoneFallback().catch((error) => {
+          setPhase("defense");
+          setError(
+            response?.error ??
+              (error instanceof Error ? error.message : "Could not finish defense."),
+          );
+        });
+      },
+    );
+  }
+
+  async function confirmationVoteFallback(
+    choice: "keep" | "change",
+    targetPlayerId = "",
+  ) {
+    await postRoomAction("/api/confirmation-vote", {
+      choice,
+      playerId: socketId,
+      roomCode: session.roomCode,
+      targetPlayerId,
+    });
+  }
+
+  function submitConfirmationChoice(
+    choice: "keep" | "change",
+    targetPlayerId = "",
+  ) {
+    setError("");
+    setConfirmationResponses((currentResponses) =>
+      currentResponses.includes(socketId)
+        ? currentResponses
+        : [...currentResponses, socketId],
+    );
+
+    if (!socketRef.current.connected) {
+      confirmationVoteFallback(choice, targetPlayerId).catch((error) => {
+        setConfirmationResponses((currentResponses) =>
+          currentResponses.filter((playerId) => playerId !== socketId),
+        );
+        setError(
+          error instanceof Error ? error.message : "Could not submit defense vote.",
+        );
+      });
+      return;
+    }
+
+    socketRef.current.timeout(1200).emit(
+      "confirmation-vote",
+      {
+        choice,
+        roomCode: session.roomCode,
+        targetPlayerId,
+      },
+      (timeoutError: Error | null, response?: SocketAck) => {
+        if (!timeoutError && response?.ok) {
+          return;
+        }
+
+        confirmationVoteFallback(choice, targetPlayerId).catch((error) => {
+          setConfirmationResponses((currentResponses) =>
+            currentResponses.filter((playerId) => playerId !== socketId),
+          );
+          setError(
+            response?.error ??
+              (error instanceof Error
+                ? error.message
+                : "Could not submit defense vote."),
+          );
+        });
+      },
+    );
   }
 
   function handleKeepVote() {
     setSelectedConfirmationTarget("");
-    setError("");
-    socketRef.current.emit("confirmation-vote", {
-      choice: "keep",
-      roomCode: session.roomCode,
-    });
+    submitConfirmationChoice("keep");
   }
 
   function handleChangeConfirmationVote(targetPlayerId: string) {
     setSelectedConfirmationTarget(targetPlayerId);
-    setError("");
-    socketRef.current.emit("confirmation-vote", {
-      choice: "change",
-      roomCode: session.roomCode,
-      targetPlayerId,
-    });
+    submitConfirmationChoice("change", targetPlayerId);
   }
 
   function handleFinishConfirmation() {
@@ -1962,11 +2048,21 @@ export default function RoomPage() {
 
         {canUseGameActions && phase === "confirmation" ? (
           <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
-            <h2 className="text-xl font-bold">Confirmation Vote</h2>
+            <h2 className="text-xl font-bold">Defense Vote</h2>
             <p className="mt-1 text-sm text-zinc-400">
-              Voters on {pendingEliminationPlayer?.name ?? "the nominee"} can keep
-              the vote or change once.
+              Only players who voted for {pendingEliminationPlayer?.name ?? "the suspect"} can submit their original vote or revote once.
             </p>
+
+            {pendingEliminationPlayer ? (
+              <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3">
+                {renderPlayerName(pendingEliminationPlayer)}
+                {confirmationResponses.length > 0 ? (
+                  <p className="mt-2 text-sm font-bold text-emerald-100">
+                    {confirmationResponses.length}/{confirmationVoterIds.length} defense submitted
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
             {isConfirmationVoter && !hasSubmittedConfirmation ? (
               <div className="mt-4 flex flex-col gap-3">
@@ -1975,8 +2071,11 @@ export default function RoomPage() {
                   className="min-h-14 rounded-xl border border-zinc-700 bg-zinc-950 px-4 text-left font-bold text-zinc-100 transition hover:border-zinc-500"
                   type="button"
                 >
-                  Keep vote
+                  Submit original vote
                 </button>
+                <p className="text-sm font-bold text-zinc-300">
+                  Or revote:
+                </p>
                 {alivePlayers
                   .filter(
                     (player) =>
@@ -1998,7 +2097,7 @@ export default function RoomPage() {
                       >
                         {renderPlayerName(player)}
                         <span className="text-sm font-bold text-red-200">
-                          Change
+                          Revote
                         </span>
                       </button>
                     );
@@ -2008,7 +2107,7 @@ export default function RoomPage() {
 
             {isConfirmationVoter && hasSubmittedConfirmation ? (
               <p className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-center text-sm font-bold text-emerald-100">
-                Confirmation submitted
+                Defense submitted
               </p>
             ) : null}
 
@@ -2044,6 +2143,13 @@ export default function RoomPage() {
           (isCurrentHost && ["defense", "confirmation"].includes(phase))) ? (
           <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
             <h2 className="text-xl font-bold">Vote Results</h2>
+            {isCurrentHost &&
+            phase === "simple-vote-results" &&
+            pendingEliminationPlayer ? (
+              <p className="mt-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm font-bold text-emerald-100">
+                Voting ended with {pendingEliminationPlayer.name} as the highest voted player.
+              </p>
+            ) : null}
             {voteResultRows.length > 0 ? (
               <div className="mt-4 flex flex-col gap-3">
                 {voteResultRows.map(({ count, targetPlayer, voters }) => (

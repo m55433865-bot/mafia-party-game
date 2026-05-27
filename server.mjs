@@ -431,6 +431,10 @@ function getHighestVotedPlayerId(voteCounts) {
   return highestVotes > 0 ? highestVotedPlayerId : "";
 }
 
+function getVoteCountForPlayer(voteCounts, playerId) {
+  return Number(voteCounts[playerId] ?? 0);
+}
+
 function getConfirmationVoterIds(room) {
   if (!room.pendingEliminationId) {
     return [];
@@ -518,6 +522,63 @@ function endVotingPhase(room) {
   room.confirmationChangedVoters = new Set();
   room.lastEliminatedPlayerId = "";
   startDefensePhase(room, nomineeId);
+  return "";
+}
+
+function finishDefensePhase(room) {
+  if (!room || !room.gameStarted || room.gameOver || room.phase !== "defense") {
+    return "Defense phase is not active.";
+  }
+
+  room.confirmationResponses = new Set();
+  room.defenseEndsAt = 0;
+  room.phase = "confirmation";
+  return "";
+}
+
+function submitConfirmationVote(room, voterId, choice, targetPlayerId) {
+  if (!room || !room.gameStarted || room.gameOver || room.phase !== "confirmation") {
+    return "Confirmation voting is not active.";
+  }
+
+  const voter = room.players.get(voterId);
+  const confirmationVoterIds = getConfirmationVoterIds(room);
+
+  if (!voter || !confirmationVoterIds.includes(voterId)) {
+    return "You cannot change this vote.";
+  }
+
+  if (room.confirmationResponses.has(voterId)) {
+    return "Your defense vote is already submitted.";
+  }
+
+  if (choice === "keep") {
+    room.confirmationResponses.add(voterId);
+    return "";
+  }
+
+  if (choice !== "change") {
+    return "Choose submit or revote.";
+  }
+
+  const targetPlayer = room.players.get(targetPlayerId);
+
+  if (!targetPlayer || targetPlayer.isHost || !targetPlayer.alive) {
+    return "Choose an alive player.";
+  }
+
+  if (targetPlayer.id === voter.id) {
+    return "You cannot vote for yourself.";
+  }
+
+  if (targetPlayer.id === room.pendingEliminationId) {
+    return "Choose a different player.";
+  }
+
+  room.votes.set(voterId, targetPlayer.id);
+  room.confirmationChangedVoters.add(voterId);
+  room.confirmationResponses.add(voterId);
+  setVoteSnapshot(room);
   return "";
 }
 
@@ -1412,6 +1473,88 @@ app.prepare().then(() => {
         sendJson(res, 400, {
           ok: false,
           error: error instanceof Error ? error.message : "Could not end voting.",
+        });
+      }
+
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/defense-done") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const room = rooms.get(cleanRoomCode);
+
+        if (room?.hostId !== cleanPlayerId) {
+          sendJson(res, 403, {
+            ok: false,
+            error: "Only the moderator can finish defense.",
+          });
+          return;
+        }
+
+        const error = finishDefensePhase(room);
+
+        if (error) {
+          sendJson(res, 400, { ok: false, error });
+          return;
+        }
+
+        console.log("defense finished via http", {
+          playerId: cleanPlayerId,
+          roomCode: cleanRoomCode,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not finish defense.",
+        });
+      }
+
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/confirmation-vote") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const cleanChoice = String(body.choice ?? "").trim();
+        const cleanTargetPlayerId = String(body.targetPlayerId ?? "").trim();
+        const room = rooms.get(cleanRoomCode);
+        const error = submitConfirmationVote(
+          room,
+          cleanPlayerId,
+          cleanChoice,
+          cleanTargetPlayerId,
+        );
+
+        if (error) {
+          sendJson(res, 400, { ok: false, error });
+          return;
+        }
+
+        console.log("defense vote submitted via http", {
+          choice: cleanChoice,
+          playerId: cleanPlayerId,
+          roomCode: cleanRoomCode,
+          targetPlayerId: cleanTargetPlayerId,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not submit defense vote.",
         });
       }
 
@@ -2413,81 +2556,50 @@ app.prepare().then(() => {
       emitRoomUpdated(io, cleanRoomCode, room);
     });
 
-    socket.on("defense-done", ({ roomCode }) => {
+    socket.on("defense-done", ({ roomCode }, done) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
 
-      if (!room || !room.gameStarted || room.gameOver || room.phase !== "defense") {
-        socket.emit("error-message", "Defense phase is not active.");
+      if (room?.hostId !== getSocketPlayerId(socket)) {
+        const error = "Only the moderator can finish defense.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
-      if (room.hostId !== getSocketPlayerId(socket)) {
-        socket.emit("error-message", "Only the moderator can finish defense.");
+      const error = finishDefensePhase(room);
+
+      if (error) {
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
-      room.confirmationResponses = new Set();
-      room.defenseEndsAt = 0;
-      room.phase = "confirmation";
       emitRoomUpdated(io, cleanRoomCode, room);
+      done?.({ ok: true });
     });
 
-    socket.on("confirmation-vote", ({ roomCode, choice, targetPlayerId }) => {
+    socket.on("confirmation-vote", ({ roomCode, choice, targetPlayerId }, done) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const cleanChoice = String(choice ?? "").trim();
       const cleanTargetPlayerId = String(targetPlayerId ?? "").trim();
       const room = rooms.get(cleanRoomCode);
-
-      if (!room || !room.gameStarted || room.gameOver || room.phase !== "confirmation") {
-        socket.emit("error-message", "Confirmation voting is not active.");
-        return;
-      }
-
       const voterId = getSocketPlayerId(socket);
-      const voter = room.players.get(voterId);
-      const confirmationVoterIds = getConfirmationVoterIds(room);
+      const error = submitConfirmationVote(
+        room,
+        voterId,
+        cleanChoice,
+        cleanTargetPlayerId,
+      );
 
-      if (!voter || !confirmationVoterIds.includes(voterId)) {
-        socket.emit("error-message", "You cannot change this vote.");
-        return;
-      }
-
-      if (room.confirmationResponses.has(voterId)) {
-        socket.emit("error-message", "Your confirmation vote is already submitted.");
-        return;
-      }
-
-      if (cleanChoice === "keep") {
-        room.confirmationResponses.add(voterId);
-      } else if (cleanChoice === "change") {
-        const targetPlayer = room.players.get(cleanTargetPlayerId);
-
-        if (!targetPlayer || targetPlayer.isHost || !targetPlayer.alive) {
-          socket.emit("error-message", "Choose an alive player.");
-          return;
-        }
-
-        if (targetPlayer.id === voter.id) {
-          socket.emit("error-message", "You cannot vote for yourself.");
-          return;
-        }
-
-        if (targetPlayer.id === room.pendingEliminationId) {
-          socket.emit("error-message", "Choose a different player.");
-          return;
-        }
-
-        room.votes.set(voterId, targetPlayer.id);
-        room.confirmationChangedVoters.add(voterId);
-        room.confirmationResponses.add(voterId);
-        setVoteSnapshot(room);
-      } else {
-        socket.emit("error-message", "Choose keep or change.");
+      if (error) {
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
       emitRoomUpdated(io, cleanRoomCode, room);
+      done?.({ ok: true });
     });
 
     socket.on("finish-confirmation", ({ roomCode }) => {
@@ -2515,14 +2627,25 @@ app.prepare().then(() => {
       }
 
       const voteCounts = setVoteSnapshot(room);
+      const originalNomineeId = room.pendingEliminationId;
       const nextNomineeId = getHighestVotedPlayerId(voteCounts);
+      const originalNomineeVotes = getVoteCountForPlayer(
+        voteCounts,
+        originalNomineeId,
+      );
+      const nextNomineeVotes = getVoteCountForPlayer(voteCounts, nextNomineeId);
 
-      if (nextNomineeId && nextNomineeId !== room.pendingEliminationId) {
+      if (
+        nextNomineeId &&
+        nextNomineeId !== originalNomineeId &&
+        nextNomineeVotes > originalNomineeVotes
+      ) {
         startDefensePhase(room, nextNomineeId);
       } else {
         setVoteSnapshot(room);
         room.confirmationResponses = new Set();
         room.defenseEndsAt = 0;
+        room.pendingEliminationId = originalNomineeId;
         room.phase = "simple-vote-results";
         room.revealVoteCounts = false;
       }
