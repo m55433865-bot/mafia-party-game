@@ -911,14 +911,59 @@ export default function RoomPage() {
     }
   }
 
+  async function submitVoteFallback(targetPlayerId: string) {
+    await postRoomAction("/api/vote-player", {
+      playerId: socketId,
+      roomCode: session.roomCode,
+      targetPlayerId,
+    });
+  }
+
   function handleVote(targetPlayerId: string) {
     setSelectedVote(targetPlayerId);
     setVoteSubmitted(true);
     setError("");
-    socketRef.current.emit("vote-player", {
-      roomCode: session.roomCode,
-      targetPlayerId,
-    });
+    setVotingStatus((currentStatus) => ({
+      ...currentStatus,
+      [socketId]: true,
+    }));
+
+    if (!socketRef.current.connected) {
+      submitVoteFallback(targetPlayerId).catch((error) => {
+        setVoteSubmitted(false);
+        setVotingStatus((currentStatus) => ({
+          ...currentStatus,
+          [socketId]: false,
+        }));
+        setError(error instanceof Error ? error.message : "Could not submit vote.");
+      });
+      return;
+    }
+
+    socketRef.current.timeout(1200).emit(
+      "vote-player",
+      {
+        roomCode: session.roomCode,
+        targetPlayerId,
+      },
+      (timeoutError: Error | null, response?: SocketAck) => {
+        if (!timeoutError && response?.ok) {
+          return;
+        }
+
+        submitVoteFallback(targetPlayerId).catch((error) => {
+          setVoteSubmitted(false);
+          setVotingStatus((currentStatus) => ({
+            ...currentStatus,
+            [socketId]: false,
+          }));
+          setError(
+            response?.error ??
+              (error instanceof Error ? error.message : "Could not submit vote."),
+          );
+        });
+      },
+    );
   }
 
   function handleBotVote(targetPlayerId: string) {

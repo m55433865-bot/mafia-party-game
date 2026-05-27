@@ -458,6 +458,34 @@ function setVoteSnapshot(room) {
   return voteCounts;
 }
 
+function submitPlayerVote(room, voterId, targetPlayerId) {
+  if (!room || !room.gameStarted || room.gameOver || room.phase !== "day") {
+    return "Voting is not active.";
+  }
+
+  const voter = room.players.get(voterId);
+  const targetPlayer = room.players.get(targetPlayerId);
+
+  if (!voter || voter.isHost || !targetPlayer || targetPlayer.isHost) {
+    return "Player not found.";
+  }
+
+  if (!voter.alive) {
+    return "Dead players cannot vote.";
+  }
+
+  if (!targetPlayer.alive) {
+    return "You can only vote for alive players.";
+  }
+
+  if (voter.id === targetPlayer.id) {
+    return "You cannot vote for yourself.";
+  }
+
+  room.votes.set(voter.id, targetPlayer.id);
+  return "";
+}
+
 function startDefensePhase(room, nomineeId) {
   room.confirmationResponses = new Set();
   room.defenseEndsAt = Date.now() + 30000;
@@ -1233,6 +1261,40 @@ app.prepare().then(() => {
         sendJson(res, 400, {
           ok: false,
           error: error instanceof Error ? error.message : "Could not start game.",
+        });
+      }
+
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/vote-player") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const cleanTargetPlayerId = String(body.targetPlayerId ?? "").trim();
+        const room = rooms.get(cleanRoomCode);
+        const error = submitPlayerVote(room, cleanPlayerId, cleanTargetPlayerId);
+
+        if (error) {
+          sendJson(res, 400, { ok: false, error });
+          return;
+        }
+
+        console.log("player voted via http", {
+          playerId: cleanPlayerId,
+          roomCode: cleanRoomCode,
+          targetPlayerId: cleanTargetPlayerId,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not submit vote.",
         });
       }
 
@@ -2032,42 +2094,21 @@ app.prepare().then(() => {
       emitGameStarted(io, cleanRoomCode, room);
     });
 
-    socket.on("vote-player", ({ roomCode, targetPlayerId }) => {
+    socket.on("vote-player", ({ roomCode, targetPlayerId }, done) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const cleanTargetPlayerId = String(targetPlayerId ?? "").trim();
       const room = rooms.get(cleanRoomCode);
-
-      if (!room || !room.gameStarted || room.gameOver || room.phase !== "day") {
-        socket.emit("error-message", "Voting is not active.");
-        return;
-      }
-
       const voterId = getSocketPlayerId(socket);
-      const voter = room.players.get(voterId);
-      const targetPlayer = room.players.get(cleanTargetPlayerId);
+      const error = submitPlayerVote(room, voterId, cleanTargetPlayerId);
 
-      if (!voter || voter.isHost || !targetPlayer || targetPlayer.isHost) {
-        socket.emit("error-message", "Player not found.");
+      if (error) {
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
-      if (!voter.alive) {
-        socket.emit("error-message", "Dead players cannot vote.");
-        return;
-      }
-
-      if (!targetPlayer.alive) {
-        socket.emit("error-message", "You can only vote for alive players.");
-        return;
-      }
-
-      if (voter.id === targetPlayer.id) {
-        socket.emit("error-message", "You cannot vote for yourself.");
-        return;
-      }
-
-      room.votes.set(voter.id, targetPlayer.id);
       emitRoomUpdated(io, cleanRoomCode, room);
+      done?.({ ok: true });
     });
 
     socket.on("moderator-bot-vote", ({
