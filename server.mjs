@@ -486,6 +486,19 @@ function submitPlayerVote(room, voterId, targetPlayerId) {
   return "";
 }
 
+function openVotingPhase(room) {
+  if (!room || !room.gameStarted || room.gameOver) {
+    return "Simple voting is not available.";
+  }
+
+  room.phase = "day";
+  room.votes = new Map();
+  room.lastVoteCounts = {};
+  room.lastVoteTargets = [];
+  room.revealVoteCounts = false;
+  return "";
+}
+
 function startDefensePhase(room, nomineeId) {
   room.confirmationResponses = new Set();
   room.defenseEndsAt = Date.now() + 30000;
@@ -1295,6 +1308,47 @@ app.prepare().then(() => {
         sendJson(res, 400, {
           ok: false,
           error: error instanceof Error ? error.message : "Could not submit vote.",
+        });
+      }
+
+      return;
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/open-voting") {
+      try {
+        const body = await readJsonBody(req);
+        const cleanRoomCode = String(body.roomCode ?? "").trim().toUpperCase();
+        const cleanPlayerId = String(body.playerId ?? "").trim();
+        const room = rooms.get(cleanRoomCode);
+
+        if (room?.hostId !== cleanPlayerId) {
+          sendJson(res, 403, {
+            ok: false,
+            error: "Only the moderator can open voting.",
+          });
+          return;
+        }
+
+        const error = openVotingPhase(room);
+
+        if (error) {
+          sendJson(res, 400, { ok: false, error });
+          return;
+        }
+
+        console.log("voting opened via http", {
+          playerId: cleanPlayerId,
+          roomCode: cleanRoomCode,
+        });
+        emitRoomUpdated(io, cleanRoomCode, room);
+        sendJson(res, 200, {
+          ok: true,
+          room: formatRoom(cleanRoomCode, room, cleanPlayerId),
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not open voting.",
         });
       }
 
@@ -2177,26 +2231,27 @@ app.prepare().then(() => {
       done?.({ ok: true });
     });
 
-    socket.on("open-voting", ({ roomCode }) => {
+    socket.on("open-voting", ({ roomCode }, done) => {
       const cleanRoomCode = String(roomCode ?? "").trim().toUpperCase();
       const room = rooms.get(cleanRoomCode);
 
-      if (!room || !room.gameStarted || room.gameOver) {
-        socket.emit("error-message", "Simple voting is not available.");
+      if (room?.hostId !== getSocketPlayerId(socket)) {
+        const error = "Only the moderator can open voting.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
-      if (room.hostId !== getSocketPlayerId(socket)) {
-        socket.emit("error-message", "Only the moderator can open voting.");
+      const error = openVotingPhase(room);
+
+      if (error) {
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
         return;
       }
 
-      room.phase = "day";
-      room.votes = new Map();
-      room.lastVoteCounts = {};
-      room.lastVoteTargets = [];
-      room.revealVoteCounts = false;
       emitRoomUpdated(io, cleanRoomCode, room);
+      done?.({ ok: true });
     });
 
     socket.on("end-voting", ({ roomCode }) => {

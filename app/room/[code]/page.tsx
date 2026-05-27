@@ -999,13 +999,49 @@ export default function RoomPage() {
     });
   }
 
+  async function openVotingFallback() {
+    await postRoomAction("/api/open-voting", {
+      playerId: socketId,
+      roomCode: session.roomCode,
+    });
+  }
+
   function handleOpenVoting() {
     setSelectedVote("");
     setVoteSubmitted(false);
     setError("");
-    socketRef.current.emit("open-voting", {
-      roomCode: session.roomCode,
-    });
+    setPhase("day");
+    setVotingStatus({});
+    setVoteCounts({});
+    setVoteTargets([]);
+
+    if (!socketRef.current.connected) {
+      openVotingFallback().catch((error) => {
+        setPhase("simple");
+        setError(error instanceof Error ? error.message : "Could not open voting.");
+      });
+      return;
+    }
+
+    socketRef.current.timeout(1200).emit(
+      "open-voting",
+      {
+        roomCode: session.roomCode,
+      },
+      (timeoutError: Error | null, response?: SocketAck) => {
+        if (!timeoutError && response?.ok) {
+          return;
+        }
+
+        openVotingFallback().catch((error) => {
+          setPhase("simple");
+          setError(
+            response?.error ??
+              (error instanceof Error ? error.message : "Could not open voting."),
+          );
+        });
+      },
+    );
   }
 
   function handleRevealVotes() {
