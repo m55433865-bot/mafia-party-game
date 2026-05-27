@@ -147,7 +147,6 @@ export default function RoomPage() {
   const [playerColors, setPlayerColors] = useState<string[]>([]);
   const [playerIcons, setPlayerIcons] = useState<string[]>([]);
   const [playerRoles, setPlayerRoles] = useState<Record<string, string>>({});
-  const [readyPlayerIds, setReadyPlayerIds] = useState<string[]>([]);
   const [recentlyDeadIds, setRecentlyDeadIds] = useState<string[]>([]);
   const [revealVoteCounts, setRevealVoteCounts] = useState(false);
   const [roleCardVisible, setRoleCardVisible] = useState(true);
@@ -281,7 +280,6 @@ export default function RoomPage() {
     setPlayerColors(room.playerColors);
     setPlayerIcons(room.playerIcons);
     setPlayerRoles(room.playerRoles);
-    setReadyPlayerIds(room.readyPlayerIds);
     setRevealVoteCounts(room.revealVoteCounts);
     setRoleOptions(room.roleOptions);
     if (!currentPlayer?.isHost || room.gameStarted) {
@@ -759,15 +757,8 @@ export default function RoomPage() {
       .map((player) => player.icon),
   );
   const currentPlayerHasProfilePhoto = Boolean(currentPlayer?.avatarUrl);
-  const allGamePlayersReady =
-    gamePlayers.length > 0 &&
-    gamePlayers.every((player) => readyPlayerIds.includes(player.id));
   const roleCountMatchesPlayers = selectedRoles.length === gamePlayers.length;
-  const canStartGame =
-    isCurrentHost &&
-    allGamePlayersReady &&
-    roleCountMatchesPlayers;
-  const currentPlayerReady = readyPlayerIds.includes(socketId);
+  const canStartGame = isCurrentHost && roleCountMatchesPlayers;
   const assignedRoleEntries = gamePlayers.map((player) => ({
     player,
     role: playerRoles[player.id] ?? "Unknown",
@@ -889,13 +880,6 @@ export default function RoomPage() {
       }
 
       return nextRoles;
-    });
-  }
-
-  function handleToggleReady() {
-    setError("");
-    socketRef.current.emit("toggle-ready", {
-      roomCode: session.roomCode,
     });
   }
 
@@ -1670,17 +1654,6 @@ export default function RoomPage() {
                   ) : null}
                 </span>
                 <div className="flex items-center gap-2">
-                  {!gameStarted && !player.isHost ? (
-                    <span
-                      className={`rounded-full px-3 py-1 text-sm font-medium ${
-                        readyPlayerIds.includes(player.id)
-                          ? "bg-emerald-500/10 text-emerald-200"
-                          : "bg-zinc-800 text-zinc-400"
-                      }`}
-                    >
-                      {readyPlayerIds.includes(player.id) ? "Ready" : "Not ready"}
-                    </span>
-                  ) : null}
                   {canUseGameActions &&
                   phase === "day" &&
                   player.alive &&
@@ -1982,9 +1955,7 @@ export default function RoomPage() {
             </button>
             <p className="mt-3 text-sm font-medium text-zinc-400">
               {roleCountMatchesPlayers
-                ? allGamePlayersReady
-                  ? "Ready to start"
-                  : "Waiting for every player to press ready"
+                ? "Ready to start"
                 : "Add one role for each player"}
             </p>
           </>
@@ -1992,17 +1963,6 @@ export default function RoomPage() {
 
         {!gameStarted && !isCurrentHost ? (
           <div className="mt-8">
-            <button
-              onClick={handleToggleReady}
-              className={`min-h-16 w-full rounded-2xl px-6 text-lg font-bold transition active:scale-[0.98] ${
-                currentPlayerReady
-                  ? "bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
-                  : "bg-red-500 text-white shadow-lg shadow-red-950/40 hover:bg-red-400"
-              }`}
-              type="button"
-            >
-              {currentPlayerReady ? "Ready" : "Press Ready"}
-            </button>
             <p className="mt-3 text-lg font-medium text-zinc-300">
               Waiting for host to start...
             </p>

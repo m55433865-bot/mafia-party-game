@@ -1198,12 +1198,8 @@ app.prepare().then(() => {
           room.selectedRoles = incomingSelectedRoles;
         }
 
-        const allPlayersReady =
-          gamePlayers.length > 0 &&
-          gamePlayers.every((player) => room.readyPlayerIds.has(player.id));
-
-        if (!allPlayersReady) {
-          sendJson(res, 400, { ok: false, error: "Waiting for all players to be ready." });
+        if (gamePlayers.length === 0) {
+          sendJson(res, 400, { ok: false, error: "Add at least one player." });
           return;
         }
 
@@ -2006,12 +2002,8 @@ app.prepare().then(() => {
         room.selectedRoles = incomingSelectedRoles;
       }
 
-      const allPlayersReady =
-        gamePlayers.length > 0 &&
-        gamePlayers.every((player) => room.readyPlayerIds.has(player.id));
-
-      if (!allPlayersReady) {
-        socket.emit("error-message", "Waiting for all players to be ready.");
+      if (gamePlayers.length === 0) {
+        socket.emit("error-message", "Add at least one player.");
         return;
       }
 
