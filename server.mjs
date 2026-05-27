@@ -432,6 +432,21 @@ function getHighestVotedPlayerId(voteCounts) {
   return highestVotes > 0 ? highestVotedPlayerId : "";
 }
 
+function getHighestVotedPlayerIds(voteCounts) {
+  const highestVotes = Math.max(
+    0,
+    ...Object.values(voteCounts).map((voteCount) => Number(voteCount) || 0),
+  );
+
+  if (highestVotes <= 0) {
+    return [];
+  }
+
+  return Object.entries(voteCounts)
+    .filter(([, voteCount]) => Number(voteCount) === highestVotes)
+    .map(([playerId]) => playerId);
+}
+
 function getVoteCountForPlayer(voteCounts, playerId) {
   return Number(voteCounts[playerId] ?? 0);
 }
@@ -469,12 +484,19 @@ function getConfirmationVoterIds(room) {
     return [];
   }
 
+  const voteCounts = getVoteDetails(room).voteCounts;
+  const highestVotedPlayerIds = getHighestVotedPlayerIds(voteCounts);
+  const confirmationTargetIds =
+    highestVotedPlayerIds.length > 1
+      ? new Set(highestVotedPlayerIds)
+      : new Set([room.pendingEliminationId]);
+
   return Array.from(room.votes.entries())
     .filter(([voterId, targetPlayerId]) => {
       const voter = room.players.get(voterId);
 
       return (
-        targetPlayerId === room.pendingEliminationId &&
+        confirmationTargetIds.has(targetPlayerId) &&
         voter?.alive &&
         !voter.isHost &&
         !room.confirmationResolvedVoters.has(voterId)
@@ -601,7 +623,10 @@ function submitConfirmationVote(room, voterId, choice, targetPlayerId) {
     return "You cannot vote for yourself.";
   }
 
-  if (targetPlayer.id === room.pendingEliminationId) {
+  if (
+    targetPlayer.id === room.pendingEliminationId ||
+    targetPlayer.id === room.votes.get(voterId)
+  ) {
     return "Choose a different player.";
   }
 
