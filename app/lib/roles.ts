@@ -11,6 +11,7 @@ export const roleNames = [
   "Detective",
   "Doctor",
   "Mafia",
+  "Mafia Framer",
   "Villager",
   "Vigilante",
   "Cupid",
@@ -38,6 +39,17 @@ export function getRoleCard(role: string): RoleCard {
       nightAbility: "Protect one player each night.",
       title: "Doctor",
       winCondition: "Eliminate all Mafia.",
+    };
+  }
+
+  if (role === "Mafia Framer") {
+    return {
+      artClassName: "from-red-950 via-zinc-950 to-zinc-700",
+      imageLabel: "MF",
+      imageSrc: "/roles/mafia-framer.png",
+      nightAbility: "Frame a player to be revealed as Mafia by Detective.",
+      title: "Mafia Framer",
+      winCondition: "Eliminate villagers.",
     };
   }
 

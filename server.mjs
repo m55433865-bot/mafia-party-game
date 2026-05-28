@@ -83,6 +83,7 @@ const ROLE_OPTIONS = [
   "Detective",
   "Doctor",
   "Mafia",
+  "Mafia Framer",
   "Villager",
   "Vigilante",
   "Cupid",
@@ -91,6 +92,10 @@ const ROLE_OPTIONS = [
 ];
 
 function isMafiaRole(role) {
+  return role === "Mafia" || role === "Mafia Framer" || role === "Mafia Jester";
+}
+
+function isMafiaKillRole(role) {
   return role === "Mafia" || role === "Mafia Jester";
 }
 
@@ -210,6 +215,7 @@ function createEmptyRoom(hostId) {
     nightActions: {
       detectiveTargetId: "",
       doctorTargetId: "",
+      framerTargetId: "",
       mafiaTargetId: "",
     },
     nightResultMessage: "",
@@ -288,11 +294,15 @@ function getAlivePlayersByRole(room, roleName) {
 
 function getAliveMafiaPlayers(room) {
   return getAliveGamePlayers(room).filter((player) =>
-    isMafiaRole(room.roles.get(player.id)),
+    isMafiaKillRole(room.roles.get(player.id)),
   );
 }
 
 function getNextNightStep(room) {
+  if (getAlivePlayersByRole(room, "Mafia Framer").length > 0) {
+    return "Mafia Framer";
+  }
+
   if (getAlivePlayersByRole(room, "Detective").length > 0) {
     return "Detective";
   }
@@ -850,6 +860,7 @@ function resetDayVotes(room) {
   room.nightActions = {
     detectiveTargetId: "",
     doctorTargetId: "",
+    framerTargetId: "",
     mafiaTargetId: "",
   };
   room.nightStep = "";
@@ -874,6 +885,7 @@ function startNightPhase(room) {
   room.nightActions = {
     detectiveTargetId: "",
     doctorTargetId: "",
+    framerTargetId: "",
     mafiaTargetId: "",
   };
   room.nightStep = getNextNightStep(room);
@@ -896,6 +908,7 @@ function resetRoomToLobby(room) {
   room.nightActions = {
     detectiveTargetId: "",
     doctorTargetId: "",
+    framerTargetId: "",
     mafiaTargetId: "",
   };
   room.nightResultMessage = "";
@@ -939,6 +952,7 @@ function checkWinCondition(room) {
     room.nightActions = {
       detectiveTargetId: "",
       doctorTargetId: "",
+      framerTargetId: "",
       mafiaTargetId: "",
     };
     return true;
@@ -952,6 +966,7 @@ function checkWinCondition(room) {
     room.nightActions = {
       detectiveTargetId: "",
       doctorTargetId: "",
+      framerTargetId: "",
       mafiaTargetId: "",
     };
     return true;
@@ -2129,6 +2144,7 @@ app.prepare().then(() => {
         nightActions: {
           detectiveTargetId: "",
           doctorTargetId: "",
+          framerTargetId: "",
           mafiaTargetId: "",
         },
         nightResultMessage: "",
@@ -3014,12 +3030,17 @@ app.prepare().then(() => {
 
     function advanceNightStepOrResolve(cleanRoomCode, room) {
       if (
-        room.nightStep === "Detective" &&
+        room.nightStep === "Mafia Framer" &&
+        getAlivePlayersByRole(room, "Detective").length > 0
+      ) {
+        room.nightStep = "Detective";
+      } else if (
+        ["Mafia Framer", "Detective"].includes(room.nightStep) &&
         getAliveMafiaPlayers(room).length > 0
       ) {
         room.nightStep = "Mafia";
       } else if (
-        ["Detective", "Mafia"].includes(room.nightStep) &&
+        ["Mafia Framer", "Detective", "Mafia"].includes(room.nightStep) &&
         getAlivePlayersByRole(room, "Doctor").length > 0
       ) {
         room.nightStep = "Doctor";
@@ -3042,13 +3063,18 @@ app.prepare().then(() => {
       const hasAliveDetective = aliveRoleEntries.some(
         ([, role]) => role === "Detective",
       );
+      const hasAliveFramer = aliveRoleEntries.some(
+        ([, role]) => role === "Mafia Framer",
+      );
       const mafiaReady = !hasAliveMafia || Boolean(room.nightActions.mafiaTargetId);
       const doctorReady =
         !hasAliveDoctor || Boolean(room.nightActions.doctorTargetId);
       const detectiveReady =
         !hasAliveDetective || Boolean(room.nightActions.detectiveTargetId);
+      const framerReady =
+        !hasAliveFramer || Boolean(room.nightActions.framerTargetId);
 
-      if (!mafiaReady || !doctorReady || !detectiveReady) {
+      if (!mafiaReady || !doctorReady || !detectiveReady || !framerReady) {
         return;
       }
 
@@ -3109,13 +3135,17 @@ app.prepare().then(() => {
         return;
       }
 
-      if (room.nightStep === "Detective") {
+      if (room.nightStep === "Mafia Framer") {
+        room.nightActions.framerTargetId = targetPlayer.id;
+      } else if (room.nightStep === "Detective") {
         room.nightActions.detectiveTargetId = targetPlayer.id;
         const detective = getAlivePlayersByRole(room, "Detective")[0];
 
         if (detective) {
           const targetRole = room.roles.get(targetPlayer.id);
-          const detectedAsMafia = isDetectiveMafiaResult(targetRole);
+          const detectedAsMafia =
+            targetPlayer.id === room.nightActions.framerTargetId ||
+            isDetectiveMafiaResult(targetRole);
 
           if (detective.socketId) {
             io.to(detective.socketId).emit("detective-result", {

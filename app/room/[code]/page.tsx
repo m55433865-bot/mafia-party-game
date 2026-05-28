@@ -155,6 +155,7 @@ export default function RoomPage() {
     "Detective",
     "Doctor",
     "Mafia",
+    "Mafia Framer",
     "Villager",
     "Vigilante",
     "Cupid",
@@ -775,7 +776,11 @@ export default function RoomPage() {
     .filter((player) => {
       const playerRole = playerRoles[player.id];
 
-      return playerRole === "Mafia" || playerRole === "Mafia Jester";
+      return (
+        playerRole === "Mafia" ||
+        playerRole === "Mafia Framer" ||
+        playerRole === "Mafia Jester"
+      );
     })
     .map((player) => ({
       player,
