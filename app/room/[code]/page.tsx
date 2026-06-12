@@ -768,10 +768,6 @@ export default function RoomPage() {
     gameStarted && !isCurrentHost && Boolean(currentPlayer && !currentPlayer.alive);
   const roleCountMatchesPlayers = selectedRoles.length === gamePlayers.length;
   const canStartGame = isCurrentHost && roleCountMatchesPlayers;
-  const assignedRoleEntries = gamePlayers.map((player) => ({
-    player,
-    role: playerRoles[player.id] ?? "Unknown",
-  }));
   const mafiaTeamEntries = gamePlayers
     .filter((player) => {
       const playerRole = playerRoles[player.id];
@@ -1983,29 +1979,6 @@ export default function RoomPage() {
 
         {gameStarted && isCurrentHost ? (
           <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
-            <h2 className="text-xl font-bold">Moderator Role View</h2>
-            <div className="mt-4 flex flex-col gap-3">
-              {assignedRoleEntries.map(({ player, role: assignedRole }) => {
-                const assignedRoleCard = getRoleCard(assignedRole);
-
-                return (
-                  <div
-                    key={player.id}
-                    className="flex items-center justify-between gap-3 rounded-xl bg-zinc-950 px-4 py-3"
-                  >
-                    {renderPlayerName(player)}
-                    <span className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-sm font-bold text-yellow-100">
-                      {assignedRoleCard.title}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        {gameStarted && isCurrentHost ? (
-          <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
             <h2 className="text-xl font-bold">Cupid Lovers</h2>
             {cupidIsInGame ? (
               <>
@@ -2062,8 +2035,15 @@ export default function RoomPage() {
 
           <div className="mt-4 flex flex-col gap-3">
             {currentPlayers.map((player) => {
+              const moderatorCanSeeRole =
+                gameStarted && isCurrentHost && !player.isHost;
+              const assignedPlayerRole = playerRoles[player.id];
               const playerListBadge =
-                canSeePlayerListRoles && !player.isHost
+                moderatorCanSeeRole
+                  ? assignedPlayerRole
+                    ? getRoleCard(assignedPlayerRole).title
+                    : "Assigning..."
+                  : canSeePlayerListRoles && !player.isHost
                   ? getRoleCard(playerRoles[player.id] ?? "Villager").title
                   : player.isHost
                     ? "Host"
@@ -2095,7 +2075,13 @@ export default function RoomPage() {
                       ✓
                     </span>
                   ) : null}
-                  <span className="rounded-full bg-red-500/10 px-3 py-1 text-sm font-medium text-red-200">
+                  <span
+                    className={`rounded-full px-3 py-1 text-sm font-medium ${
+                      moderatorCanSeeRole
+                        ? "border border-yellow-500/30 bg-yellow-500/10 text-yellow-100"
+                        : "bg-red-500/10 text-red-200"
+                    }`}
+                  >
                     {playerListBadge}
                   </span>
                   {gameStarted && isCurrentHost && !player.isHost ? (
