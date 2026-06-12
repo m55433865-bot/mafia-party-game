@@ -24,6 +24,18 @@ export function getStablePlayerId() {
   return nextPlayerId;
 }
 
+export function setStablePlayerId(playerId: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const cleanPlayerId = playerId.trim();
+
+  if (cleanPlayerId) {
+    localStorage.setItem(playerIdStorageKey, cleanPlayerId);
+  }
+}
+
 if (typeof window !== "undefined") {
   console.log("Socket.io connection URL", socketUrl);
 }

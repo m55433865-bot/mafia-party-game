@@ -5,7 +5,6 @@ import { Server } from "socket.io";
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME ?? (dev ? "localhost" : "0.0.0.0");
 const port = Number(process.env.PORT) || 3000;
-const RECONNECT_GRACE_MS = 2 * 60 * 1000;
 const ALLOWED_SOCKET_ORIGINS = new Set(
   [
     "https://mafia.yourteck.com",
@@ -126,6 +125,27 @@ function createUniqueRoomCode(rooms) {
   }
 
   return code;
+}
+
+function findPlayerRoom(rooms, playerId, ignoredRoomCode = "") {
+  const cleanPlayerId = String(playerId ?? "").trim();
+  const cleanIgnoredRoomCode = String(ignoredRoomCode ?? "").trim().toUpperCase();
+
+  if (!cleanPlayerId) {
+    return null;
+  }
+
+  for (const [roomCode, room] of rooms.entries()) {
+    if (roomCode !== cleanIgnoredRoomCode && room.players.has(cleanPlayerId)) {
+      return {
+        player: room.players.get(cleanPlayerId),
+        room,
+        roomCode,
+      };
+    }
+  }
+
+  return null;
 }
 
 function getUsedColors(room, ignoredPlayerId = "") {
@@ -1150,7 +1170,7 @@ function markPlayerDisconnected(io, rooms, roomCode, playerId, reason) {
   player.disconnectedAt = Date.now();
   player.socketId = "";
 
-  console.log("player temporarily disconnected", {
+  console.log("player disconnected; seat retained for reconnect", {
     roomCode: cleanRoomCode,
     playerId,
     playerName: player.name,
@@ -1159,27 +1179,8 @@ function markPlayerDisconnected(io, rooms, roomCode, playerId, reason) {
 
   if (player.reconnectTimeout) {
     clearTimeout(player.reconnectTimeout);
+    player.reconnectTimeout = null;
   }
-
-  player.reconnectTimeout = setTimeout(() => {
-    const currentRoom = rooms.get(cleanRoomCode);
-    const currentPlayer = currentRoom?.players.get(playerId);
-
-    if (!currentRoom || !currentPlayer || currentPlayer.connected) {
-      return;
-    }
-
-    console.log("reconnect timeout expired", {
-      roomCode: cleanRoomCode,
-      playerId,
-      playerName: currentPlayer.name,
-    });
-
-    removePlayerFromRoom(io, { id: playerId, data: { playerId }, leave: () => {} }, rooms, {
-      roomCode: cleanRoomCode,
-      playerId,
-    });
-  }, RECONNECT_GRACE_MS);
 
   emitRoomUpdated(io, cleanRoomCode, room);
 }
@@ -1229,6 +1230,7 @@ function readJsonBody(req) {
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
+    "cache-control": "no-store",
     "content-type": "application/json",
   });
   res.end(JSON.stringify(payload));
@@ -1242,6 +1244,43 @@ app.prepare().then(() => {
   const httpServer = createServer(async (req, res) => {
     const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host}`);
 
+    if (req.method === "GET" && requestUrl.pathname === "/api/active-room") {
+      const cleanPlayerId = String(requestUrl.searchParams.get("playerId") ?? "")
+        .trim();
+      const activeMembership = findPlayerRoom(rooms, cleanPlayerId);
+
+      if (!cleanPlayerId) {
+        sendJson(res, 400, {
+          ok: false,
+          error: "Player id is required.",
+        });
+        return;
+      }
+
+      if (!activeMembership) {
+        sendJson(res, 200, {
+          activeRoom: null,
+          ok: true,
+        });
+        return;
+      }
+
+      const { player, room, roomCode } = activeMembership;
+      sendJson(res, 200, {
+        activeRoom: {
+          avatarUrl: player.avatarUrl,
+          connected: player.connected,
+          gameStarted: room.gameStarted,
+          isHost: player.isHost,
+          phase: room.phase,
+          playerName: player.name,
+          roomCode,
+        },
+        ok: true,
+      });
+      return;
+    }
+
     if (req.method === "POST" && requestUrl.pathname === "/api/create-room") {
       try {
         const startedAt = Date.now();
@@ -1252,6 +1291,20 @@ app.prepare().then(() => {
 
         if (!cleanPlayerId || !cleanPlayerName) {
           sendJson(res, 400, { ok: false, error: "Enter your name first." });
+          return;
+        }
+
+        const activeMembership = findPlayerRoom(rooms, cleanPlayerId);
+
+        if (activeMembership) {
+          sendJson(res, 409, {
+            activeRoom: {
+              isHost: activeMembership.player.isHost,
+              roomCode: activeMembership.roomCode,
+            },
+            ok: false,
+            error: "You already have an active room. Reconnect to it first.",
+          });
           return;
         }
 
@@ -1305,6 +1358,24 @@ app.prepare().then(() => {
 
         if (!room) {
           sendJson(res, 404, { ok: false, error: "Room does not exist." });
+          return;
+        }
+
+        const otherActiveMembership = findPlayerRoom(
+          rooms,
+          cleanPlayerId,
+          cleanRoomCode,
+        );
+
+        if (otherActiveMembership) {
+          sendJson(res, 409, {
+            activeRoom: {
+              isHost: otherActiveMembership.player.isHost,
+              roomCode: otherActiveMembership.roomCode,
+            },
+            ok: false,
+            error: "You already have an active room. Reconnect to it first.",
+          });
           return;
         }
 
@@ -2127,6 +2198,15 @@ app.prepare().then(() => {
         return;
       }
 
+      const activeMembership = findPlayerRoom(rooms, cleanPlayerId);
+
+      if (activeMembership) {
+        const error = "You already have an active room. Reconnect to it first.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
+        return;
+      }
+
       const roomCode = createUniqueRoomCode(rooms);
       rooms.set(roomCode, {
         confirmationResponses: new Set(),
@@ -2232,6 +2312,19 @@ app.prepare().then(() => {
 
       if (!room) {
         const error = "Room does not exist.";
+        socket.emit("error-message", error);
+        done?.({ ok: false, error });
+        return;
+      }
+
+      const otherActiveMembership = findPlayerRoom(
+        rooms,
+        cleanPlayerId,
+        cleanRoomCode,
+      );
+
+      if (otherActiveMembership) {
+        const error = "You already have an active room. Reconnect to it first.";
         socket.emit("error-message", error);
         done?.({ ok: false, error });
         return;

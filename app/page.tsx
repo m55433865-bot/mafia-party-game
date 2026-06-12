@@ -8,8 +8,22 @@ import {
   isMafiaProfileComplete,
 } from "./lib/mafiaProfile";
 import { RoleImagePreloader } from "./components/RoleImagePreloader";
-import { getStablePlayerId, socket } from "./lib/socket";
+import {
+  getStablePlayerId,
+  setStablePlayerId,
+  socket,
+} from "./lib/socket";
 import { supabase } from "./lib/supabase";
+
+type ActiveRoom = {
+  avatarUrl: string;
+  connected: boolean;
+  gameStarted: boolean;
+  isHost: boolean;
+  phase: string;
+  playerName: string;
+  roomCode: string;
+};
 
 export default function Home() {
   const router = useRouter();
@@ -17,7 +31,9 @@ export default function Home() {
   const [userEmail, setUserEmail] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [error, setError] = useState("");
+  const [activeRoom, setActiveRoom] = useState<ActiveRoom | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isActiveRoomLoading, setIsActiveRoomLoading] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
 
@@ -69,6 +85,26 @@ export default function Home() {
     return result;
   }
 
+  async function getActiveRoom() {
+    const response = await fetch(
+      `/api/active-room?playerId=${encodeURIComponent(getStablePlayerId())}`,
+      {
+        cache: "no-store",
+      },
+    );
+    const result = (await response.json()) as {
+      activeRoom?: ActiveRoom | null;
+      error?: string;
+      ok: boolean;
+    };
+
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error ?? "Could not check your active room.");
+    }
+
+    return result.activeRoom ?? null;
+  }
+
   useEffect(() => {
     let isMounted = true;
 
@@ -82,6 +118,7 @@ export default function Home() {
         return;
       }
 
+      setStablePlayerId(user.id);
       const mafiaProfile = await ensureMafiaProfile(user);
 
       if (!isMafiaProfileComplete(mafiaProfile)) {
@@ -95,6 +132,13 @@ export default function Home() {
 
       setProfile(mafiaProfile);
       setUserEmail(user.email ?? "");
+      try {
+        setActiveRoom(await getActiveRoom());
+      } catch (activeRoomError) {
+        console.error("Could not check active room", activeRoomError);
+        setActiveRoom(null);
+      }
+      setIsActiveRoomLoading(false);
       setIsAuthLoading(false);
     }
 
@@ -104,6 +148,7 @@ export default function Home() {
       }
 
       setError("Could not load your account.");
+      setIsActiveRoomLoading(false);
       setIsAuthLoading(false);
     });
 
@@ -112,8 +157,79 @@ export default function Home() {
     };
   }, [router]);
 
+  useEffect(() => {
+    if (isAuthLoading) {
+      return;
+    }
+
+    let isMounted = true;
+
+    async function refreshActiveRoom() {
+      try {
+        const nextActiveRoom = await getActiveRoom();
+
+        if (isMounted) {
+          setActiveRoom(nextActiveRoom);
+          setIsActiveRoomLoading(false);
+        }
+      } catch (activeRoomError) {
+        console.error("Could not refresh active room", activeRoomError);
+      }
+    }
+
+    function handlePageShow() {
+      void refreshActiveRoom();
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void refreshActiveRoom();
+      }
+    }
+
+    window.addEventListener("pageshow", handlePageShow);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener("pageshow", handlePageShow);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [isAuthLoading]);
+
   function getPlayerName() {
     return profile?.display_name?.trim() ?? "";
+  }
+
+  async function handleReconnect() {
+    if (!activeRoom) {
+      return;
+    }
+
+    try {
+      setError("");
+      setIsLoading(true);
+      setLoadingMessage("Restoring game...");
+      const currentActiveRoom = await getActiveRoom();
+
+      if (!currentActiveRoom) {
+        setActiveRoom(null);
+        throw new Error("This room is no longer active.");
+      }
+
+      enterRoom({
+        avatarUrl: currentActiveRoom.avatarUrl || profile?.avatar_url || "",
+        isHost: currentActiveRoom.isHost,
+        playerName: currentActiveRoom.playerName || getPlayerName(),
+        roomCode: currentActiveRoom.roomCode,
+      });
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Could not restore the room.",
+      );
+      setIsLoading(false);
+      setLoadingMessage("");
+    }
   }
 
   async function handleCreateRoom() {
@@ -259,9 +375,41 @@ export default function Home() {
         </div>
 
         <div className="mt-6 flex w-full flex-col gap-4">
+          {!isActiveRoomLoading && activeRoom ? (
+            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-left">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-emerald-200">
+                    Active {activeRoom.gameStarted ? "game" : "lobby"}
+                  </p>
+                  <p className="mt-1 text-2xl font-black">
+                    Room {activeRoom.roomCode}
+                  </p>
+                  <p className="mt-1 text-sm text-zinc-300">
+                    {activeRoom.isHost ? "Moderator" : "Player"} ·{" "}
+                    {activeRoom.playerName}
+                  </p>
+                </div>
+                <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-bold text-emerald-100">
+                  Rejoin
+                </span>
+              </div>
+              <button
+                onClick={handleReconnect}
+                disabled={isLoading}
+                className="mt-4 min-h-14 w-full rounded-xl bg-emerald-400 px-5 text-base font-black text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400 active:scale-[0.98]"
+                type="button"
+              >
+                {isLoading && loadingMessage === "Restoring game..."
+                  ? loadingMessage
+                  : "Reconnect"}
+              </button>
+            </div>
+          ) : null}
+
           <button
             onClick={handleCreateRoom}
-            disabled={isLoading}
+            disabled={isLoading || Boolean(activeRoom)}
             className="min-h-16 rounded-2xl bg-red-500 px-6 text-lg font-bold text-white shadow-lg shadow-red-950/40 transition hover:bg-red-400 disabled:cursor-not-allowed disabled:bg-zinc-700 active:scale-[0.98]"
           >
             {isLoading ? loadingMessage || "Connecting..." : "Create Room"}
@@ -295,11 +443,17 @@ export default function Home() {
 
           <button
             onClick={handleJoinRoom}
-            disabled={isLoading}
+            disabled={isLoading || Boolean(activeRoom)}
             className="min-h-16 rounded-2xl border border-zinc-700 bg-zinc-900 px-6 text-lg font-bold text-zinc-100 transition hover:border-zinc-500 hover:bg-zinc-800 active:scale-[0.98]"
           >
             Join Room
           </button>
+
+          {activeRoom ? (
+            <p className="text-sm text-zinc-400">
+              Reconnect and use Leave Lobby before creating or joining another room.
+            </p>
+          ) : null}
 
           <button
             onClick={handleLogout}

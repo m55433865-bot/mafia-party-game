@@ -17,6 +17,7 @@ import { RoleImagePreloader } from "../../components/RoleImagePreloader";
 import { getRoleCard } from "../../lib/roles";
 import {
   getStablePlayerId,
+  setStablePlayerId as storeStablePlayerId,
   socket,
 } from "../../lib/socket";
 import { supabase } from "../../lib/supabase";
@@ -97,7 +98,7 @@ type RoomActionResponse = {
   room?: RoomUpdate;
 };
 
-let pendingLeaveTimeout: number | null = null;
+let pendingDisconnectTimeout: number | null = null;
 let isManualLeaveInProgress = false;
 
 const fallbackPlayerColors = [
@@ -116,6 +117,30 @@ const fallbackPlayerColors = [
   "#f472b6",
   "#fb7185",
   "#f5f5f4",
+];
+
+const moderatorRoleGroups = [
+  {
+    key: "mafia",
+    label: "Mafia",
+    roles: ["Mafia", "Mafia Framer", "Mafia Jester"],
+    panelClassName: "border-red-500/25 bg-red-500/5",
+    titleClassName: "text-red-200",
+  },
+  {
+    key: "villagers",
+    label: "Villagers",
+    roles: ["Detective", "Doctor", "Vigilante", "Cupid", "Villager"],
+    panelClassName: "border-emerald-500/25 bg-emerald-500/5",
+    titleClassName: "text-emerald-200",
+  },
+  {
+    key: "third-party",
+    label: "Third Party",
+    roles: ["Jester"],
+    panelClassName: "border-purple-500/25 bg-purple-500/5",
+    titleClassName: "text-purple-200",
+  },
 ];
 
 export default function RoomPage() {
@@ -176,7 +201,9 @@ export default function RoomPage() {
   const [winner, setWinner] = useState("");
   const [isRealtimeReady, setIsRealtimeReady] = useState(false);
   const [isRoomCodeCopied, setIsRoomCodeCopied] = useState(false);
-  const stablePlayerId = useMemo(() => getStablePlayerId(), []);
+  const [stablePlayerId, setStablePlayerId] = useState(() =>
+    getStablePlayerId(),
+  );
 
   const fallbackSession = JSON.stringify({
     avatarUrl: "",
@@ -337,6 +364,9 @@ export default function RoomPage() {
         return;
       }
 
+      storeStablePlayerId(user.id);
+      setStablePlayerId(user.id);
+      setSocketId(user.id);
       const profile = await ensureMafiaProfile(user);
 
       if (!isMafiaProfileComplete(profile)) {
@@ -381,9 +411,9 @@ export default function RoomPage() {
     const currentSocket = socketRef.current;
     isManualLeaveInProgress = false;
 
-    if (pendingLeaveTimeout) {
-      window.clearTimeout(pendingLeaveTimeout);
-      pendingLeaveTimeout = null;
+    if (pendingDisconnectTimeout) {
+      window.clearTimeout(pendingDisconnectTimeout);
+      pendingDisconnectTimeout = null;
     }
 
     function handleRoomUpdated(room: RoomUpdate) {
@@ -544,50 +574,30 @@ export default function RoomPage() {
       }
     }
 
-    function emitLeaveRoomAndDisconnect(reason: string) {
-      const leavePayload = {
-        roomCode: session.roomCode,
-        playerId: stablePlayerId,
-        playerName: session.playerName,
-      };
-
-      console.log("leave-room", { ...leavePayload, reason });
-
-      if (!currentSocket.connected) {
-        return;
-      }
-
-      currentSocket.emit("leave-room", leavePayload, () => {
-        currentSocket.disconnect();
-      });
-
-      window.setTimeout(() => {
-        if (currentSocket.connected) {
-          currentSocket.disconnect();
-        }
-      }, 200);
-    }
-
-    function scheduleLeaveRoomAndDisconnect() {
+    function scheduleDisconnect() {
       if (isManualLeaveInProgress) {
         return;
       }
 
-      if (pendingLeaveTimeout) {
-        window.clearTimeout(pendingLeaveTimeout);
+      if (pendingDisconnectTimeout) {
+        window.clearTimeout(pendingDisconnectTimeout);
       }
 
-      pendingLeaveTimeout = window.setTimeout(() => {
-        pendingLeaveTimeout = null;
+      pendingDisconnectTimeout = window.setTimeout(() => {
+        pendingDisconnectTimeout = null;
 
         if (window.location.pathname.toUpperCase() === roomPath.toUpperCase()) {
-          console.log("leave-room skipped: still on room page", {
+          console.log("room disconnect skipped: still on room page", {
             roomCode: session.roomCode,
           });
           return;
         }
 
-        emitLeaveRoomAndDisconnect("room-page-unmount");
+        console.log("room page closed; retaining player for reconnect", {
+          playerId: stablePlayerId,
+          roomCode: session.roomCode,
+        });
+        currentSocket.disconnect();
       }, 150);
     }
 
@@ -608,8 +618,8 @@ export default function RoomPage() {
     connectNow("effect");
 
     return () => {
-      // Delay cleanup so React Strict Mode remounts do not delete an active room.
-      scheduleLeaveRoomAndDisconnect();
+      // Delay disconnect so React Strict Mode remounts keep the same socket.
+      scheduleDisconnect();
       currentSocket.off("connect", handleConnect);
       currentSocket.off("disconnect", handleDisconnect);
       currentSocket.off("connect_error", handleConnectError);
@@ -768,6 +778,22 @@ export default function RoomPage() {
     gameStarted && !isCurrentHost && Boolean(currentPlayer && !currentPlayer.alive);
   const roleCountMatchesPlayers = selectedRoles.length === gamePlayers.length;
   const canStartGame = isCurrentHost && roleCountMatchesPlayers;
+  const moderatorPlayerGroups = moderatorRoleGroups
+    .map((group) => ({
+      ...group,
+      players: gamePlayers
+        .filter((player) => group.roles.includes(playerRoles[player.id]))
+        .sort((firstPlayer, secondPlayer) => {
+          const firstRoleIndex = group.roles.indexOf(playerRoles[firstPlayer.id]);
+          const secondRoleIndex = group.roles.indexOf(playerRoles[secondPlayer.id]);
+
+          return (
+            firstRoleIndex - secondRoleIndex ||
+            firstPlayer.name.localeCompare(secondPlayer.name)
+          );
+        }),
+    }))
+    .filter((group) => group.players.length > 0);
   const mafiaTeamEntries = gamePlayers
     .filter((player) => {
       const playerRole = playerRoles[player.id];
@@ -1608,6 +1634,75 @@ export default function RoomPage() {
     );
   }
 
+  function renderPlayerListRow(player: Player) {
+    const moderatorCanSeeRole =
+      gameStarted && isCurrentHost && !player.isHost;
+    const assignedPlayerRole = playerRoles[player.id];
+    const playerListBadge =
+      moderatorCanSeeRole
+        ? assignedPlayerRole
+          ? getRoleCard(assignedPlayerRole).title
+          : "Assigning..."
+        : canSeePlayerListRoles && !player.isHost
+          ? getRoleCard(playerRoles[player.id] ?? "Villager").title
+          : player.isHost
+            ? "Host"
+            : player.isBot
+              ? "Bot"
+              : "Player";
+
+    return (
+      <div
+        key={player.id}
+        className={`player-row flex items-center justify-between gap-3 rounded-xl bg-zinc-950 px-3 py-3 ${
+          recentlyDeadIds.includes(player.id) && !player.isHost
+            ? "player-row-breaking"
+            : ""
+        } ${!player.isHost && !player.alive ? "player-row-dead" : ""}`}
+      >
+        <span className="min-w-0">
+          {renderPlayerName(player)}
+          {!player.isHost && !player.alive ? (
+            <span className="ml-9 block text-sm text-zinc-500">(Dead)</span>
+          ) : null}
+        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          {canUseGameActions &&
+          phase === "day" &&
+          player.alive &&
+          votingStatus[player.id] ? (
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500 text-sm font-bold text-zinc-950">
+              ✓
+            </span>
+          ) : null}
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-medium ${
+              moderatorCanSeeRole
+                ? "border border-yellow-500/30 bg-yellow-500/10 text-yellow-100"
+                : "bg-red-500/10 text-red-200"
+            }`}
+          >
+            {playerListBadge}
+          </span>
+          {gameStarted && isCurrentHost && !player.isHost ? (
+            <button
+              onClick={() => handleModeratorKillPlayer(player.id)}
+              disabled={!player.alive}
+              className={`min-h-8 rounded-full border px-3 text-xs font-bold transition ${
+                player.alive
+                  ? "border-red-500/30 bg-red-500/10 text-red-100 hover:border-red-400"
+                  : "cursor-not-allowed border-zinc-700 bg-zinc-900 text-zinc-500"
+              }`}
+              type="button"
+            >
+              {player.alive ? "Kill" : "Off"}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   if (isAuthLoading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-5 py-10 text-white">
@@ -2033,76 +2128,38 @@ export default function RoomPage() {
         <div className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left">
           <h2 className="text-xl font-bold">Players</h2>
 
-          <div className="mt-4 flex flex-col gap-3">
-            {currentPlayers.map((player) => {
-              const moderatorCanSeeRole =
-                gameStarted && isCurrentHost && !player.isHost;
-              const assignedPlayerRole = playerRoles[player.id];
-              const playerListBadge =
-                moderatorCanSeeRole
-                  ? assignedPlayerRole
-                    ? getRoleCard(assignedPlayerRole).title
-                    : "Assigning..."
-                  : canSeePlayerListRoles && !player.isHost
-                  ? getRoleCard(playerRoles[player.id] ?? "Villager").title
-                  : player.isHost
-                    ? "Host"
-                    : player.isBot
-                      ? "Bot"
-                      : "Player";
+          {gameStarted && isCurrentHost ? (
+            <div className="mt-4 flex flex-col gap-4">
+              {currentPlayers
+                .filter((player) => player.isHost)
+                .map(renderPlayerListRow)}
 
-              return (
-              <div
-                key={player.id}
-                className={`player-row flex items-center justify-between rounded-xl bg-zinc-950 px-4 py-3 ${
-                  recentlyDeadIds.includes(player.id) && !player.isHost
-                    ? "player-row-breaking"
-                    : ""
-                } ${!player.isHost && !player.alive ? "player-row-dead" : ""}`}
-              >
-                <span>
-                  {renderPlayerName(player)}
-                  {!player.isHost && !player.alive ? (
-                    <span className="ml-2 text-sm text-zinc-500">(Dead)</span>
-                  ) : null}
-                </span>
-                <div className="flex items-center gap-2">
-                  {canUseGameActions &&
-                  phase === "day" &&
-                  player.alive &&
-                  votingStatus[player.id] ? (
-                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500 text-sm font-bold text-zinc-950">
-                      ✓
+              {moderatorPlayerGroups.map((group) => (
+                <section
+                  key={group.key}
+                  className={`rounded-xl border p-3 ${group.panelClassName}`}
+                >
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className={`text-sm font-bold ${group.titleClassName}`}>
+                      {group.label}
+                    </h3>
+                    <span className="text-xs font-medium text-zinc-500">
+                      {group.players.length}
                     </span>
-                  ) : null}
-                  <span
-                    className={`rounded-full px-3 py-1 text-sm font-medium ${
-                      moderatorCanSeeRole
-                        ? "border border-yellow-500/30 bg-yellow-500/10 text-yellow-100"
-                        : "bg-red-500/10 text-red-200"
-                    }`}
-                  >
-                    {playerListBadge}
-                  </span>
-                  {gameStarted && isCurrentHost && !player.isHost ? (
-                    <button
-                      onClick={() => handleModeratorKillPlayer(player.id)}
-                      disabled={!player.alive}
-                      className={`min-h-8 rounded-full border px-3 text-xs font-bold transition ${
-                        player.alive
-                          ? "border-red-500/30 bg-red-500/10 text-red-100 hover:border-red-400"
-                          : "cursor-not-allowed border-zinc-700 bg-zinc-900 text-zinc-500"
-                      }`}
-                      type="button"
-                    >
-                      {player.alive ? "Kill" : "Off"}
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-              );
-            })}
-          </div>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {group.players.map(renderPlayerListRow)}
+                  </div>
+                </section>
+              ))}
+            </div>
+          ) : null}
+
+          {!gameStarted || !isCurrentHost ? (
+            <div className="mt-4 flex flex-col gap-3">
+              {currentPlayers.map(renderPlayerListRow)}
+            </div>
+          ) : null}
         </div>
 
         {canUseGameActions && phase === "day" ? (
